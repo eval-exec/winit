@@ -42,8 +42,21 @@ impl EventSink {
         self.window_events.append(&mut other.window_events);
     }
 
+    /// Discard pending events for a retired window, preserving device events
+    /// and the relative order of events for the remaining windows.
+    pub(crate) fn remove_window(&mut self, retired: WindowId) {
+        self.window_events.retain(|event| match event {
+            Event::WindowEvent { window_id, .. } => *window_id != retired,
+            Event::DeviceEvent { .. } => true,
+        });
+    }
+
     #[inline]
     pub(crate) fn drain(&mut self) -> Drain<'_, Event> {
         self.window_events.drain(..)
     }
 }
+
+#[cfg(test)]
+#[path = "sink_test.rs"]
+mod tests;

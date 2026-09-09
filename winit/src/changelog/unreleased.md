@@ -39,3 +39,8 @@ The migration guide could reference other migration examples in the current
 changelog entry.
 
 ## Unreleased
+
+### Fixed
+
+- On Wayland, discard queued updates for destroyed windows, fixing a panic
+  when popups are replaced from an event callback.

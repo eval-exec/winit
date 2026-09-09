@@ -380,6 +380,12 @@ impl EventLoop {
 
         for mut compositor_update in compositor_updates.drain(..) {
             let window_id = compositor_update.window_id;
+            // Creating a window in an application callback can roundtrip Wayland
+            // and queue updates for a popup which is retired later in that same
+            // iteration. Never dispatch an update beyond its window's lifetime.
+            if self.with_state(|state| !state.windows.get_mut().contains_key(&window_id)) {
+                continue;
+            }
             if compositor_update.scale_changed {
                 let (physical_size, scale_factor) = self.with_state(|state| {
                     let windows = state.windows.get_mut();
@@ -457,7 +463,9 @@ impl EventLoop {
         for event in buffer_sink.drain() {
             match event {
                 Event::WindowEvent { window_id, event } => {
-                    app.window_event(&self.active_event_loop, window_id, event)
+                    if self.with_state(|state| state.windows.get_mut().contains_key(&window_id)) {
+                        app.window_event(&self.active_event_loop, window_id, event)
+                    }
                 },
                 Event::DeviceEvent { event } => {
                     app.device_event(&self.active_event_loop, None, event)
@@ -472,7 +480,9 @@ impl EventLoop {
         for event in buffer_sink.drain() {
             match event {
                 Event::WindowEvent { window_id, event } => {
-                    app.window_event(&self.active_event_loop, window_id, event)
+                    if self.with_state(|state| state.windows.get_mut().contains_key(&window_id)) {
+                        app.window_event(&self.active_event_loop, window_id, event)
+                    }
                 },
                 Event::DeviceEvent { event } => {
                     app.device_event(&self.active_event_loop, None, event)
@@ -506,6 +516,12 @@ impl EventLoop {
                         window_requests.get(&w).unwrap().take_closed();
                         mem::drop(window_requests.remove(&w));
                         mem::drop(state.windows.get_mut().remove(&w));
+                        // Retire all queued window events before Destroyed. A
+                        // callback may have queued these after the dispatch
+                        // buffers were drained earlier in this iteration.
+                        state.window_compositor_updates.retain(|update| update.window_id != w);
+                        state.events_sink.remove_window(w);
+                        state.window_events_sink.lock().unwrap().remove_window(w);
                     });
                     app.window_event(&self.active_event_loop, w, WindowEvent::Destroyed);
                 }
