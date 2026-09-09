@@ -9,7 +9,10 @@ fn enter_remains_named_when_android_character_map_returns_newline() {
 
 #[test]
 fn ctrl_j_is_not_rewritten_to_enter() {
-    assert_eq!(to_logical(Some(KeyMapChar::Unicode('\n')), Keycode::J), Key::Character("\n".into()));
+    assert_eq!(
+        to_logical(Some(KeyMapChar::Unicode('\n')), Keycode::J),
+        Key::Character("\n".into())
+    );
 }
 
 #[test]

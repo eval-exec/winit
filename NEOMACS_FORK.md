@@ -1,4 +1,12 @@
-# Neomacs Wayland popup lifetime patch
+# Neomacs integration fork
+
+`eval-exec/winit` uses `master` as its maintained Neomacs integration branch.
+Keep upstream history and the required platform fixes together here; Neomacs
+pins an exact commit from this branch. Topic branches are not separate release
+channels. The local `origin` remote is upstream `rust-windowing/winit`; `fork`
+is `eval-exec/winit`.
+
+## Wayland popup lifetime
 
 Base: upstream `a98b2b217c901f8776a2bdb4ebc35ea7611998ce`.
 
@@ -40,4 +48,25 @@ RUST_LOG=warn cargo nextest run -p neomacs-display-runtime \
 That test deliberately commits popups inside resize callbacks, independently
 of Neomacs's production post-event scheduling. It panicked in the original
 backend at `event_loop/mod.rs:386:58` and passed with this patch. Both projects
-use `cargo nextest`; no other platform has been runtime-verified here.
+use `cargo nextest`.
+
+## Android named keys and modifiers
+
+Android's character map can report LF for Enter. Preserve the named Enter
+identity before Unicode lookup, keeping it distinct from an actual Ctrl-J.
+The same rule applies to other named control keys. Publish each changed
+Android modifier sample before its keyboard event, and clear modifiers when
+focus is lost.
+
+The Enter regression failed on a Redmi K20 Pro (Android 12), returning
+`Character("\n")` instead of `Named(Enter)`. After the fix, all three Android
+key translation tests passed on-device, including Ctrl-J distinction and
+Ctrl+Shift modifier sampling. These are backend tests, not a claim that
+Neomacs's complete Android input/IME integration is finished.
+
+Run the tests with an Android NDK toolchain and an ADB runner configured:
+
+```sh
+cargo nextest run --target aarch64-linux-android -p winit-android \
+  --features game-activity --lib -E 'test(/keycodes::tests/)' --test-threads 1
+```

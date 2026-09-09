@@ -1,5 +1,5 @@
-use android_activity::AndroidApp;
 use android_activity::input::{KeyAction, KeyEvent, KeyMapChar, Keycode, MetaState};
+use android_activity::AndroidApp;
 use winit_core::keyboard::{
     Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKey, NativeKeyCode, PhysicalKey,
 };
@@ -10,10 +10,20 @@ mod tests;
 
 pub fn modifiers_from_android(state: MetaState) -> ModifiersState {
     let mut modifiers = ModifiersState::empty();
-    modifiers.set(ModifiersState::SHIFT, state.shift_on() || state.shift_left_on() || state.shift_right_on());
-    modifiers.set(ModifiersState::CONTROL, state.ctrl_on() || state.ctrl_left_on() || state.ctrl_right_on());
-    modifiers.set(ModifiersState::ALT, state.alt_on() || state.alt_left_on() || state.alt_right_on());
-    modifiers.set(ModifiersState::META, state.meta_on() || state.meta_left_on() || state.meta_right_on());
+    modifiers.set(
+        ModifiersState::SHIFT,
+        state.shift_on() || state.shift_left_on() || state.shift_right_on(),
+    );
+    modifiers.set(
+        ModifiersState::CONTROL,
+        state.ctrl_on() || state.ctrl_left_on() || state.ctrl_right_on(),
+    );
+    modifiers
+        .set(ModifiersState::ALT, state.alt_on() || state.alt_left_on() || state.alt_right_on());
+    modifiers.set(
+        ModifiersState::META,
+        state.meta_on() || state.meta_left_on() || state.meta_right_on(),
+    );
     modifiers
 }
 

@@ -205,8 +205,11 @@ impl EventLoop {
                 },
                 MainEvent::LostFocus => {
                     self.modifiers = Default::default();
-                    app.window_event(&self.window_target, GLOBAL_WINDOW,
-                        event::WindowEvent::ModifiersChanged(self.modifiers.into()));
+                    app.window_event(
+                        &self.window_target,
+                        GLOBAL_WINDOW,
+                        event::WindowEvent::ModifiersChanged(self.modifiers.into()),
+                    );
                     HAS_FOCUS.store(false, Ordering::Relaxed);
                     let event = event::WindowEvent::Focused(false);
                     app.window_event(&self.window_target, GLOBAL_WINDOW, event);
@@ -472,8 +475,11 @@ impl EventLoop {
                         if modifiers != self.modifiers {
                             self.modifiers = modifiers;
                             // Consumers must observe this sample before the key it qualifies.
-                            app.window_event(&self.window_target, GLOBAL_WINDOW,
-                                event::WindowEvent::ModifiersChanged(modifiers.into()));
+                            app.window_event(
+                                &self.window_target,
+                                GLOBAL_WINDOW,
+                                event::WindowEvent::ModifiersChanged(modifiers.into()),
+                            );
                         }
                         let state = match key.action() {
                             KeyAction::Down => event::ElementState::Pressed,
