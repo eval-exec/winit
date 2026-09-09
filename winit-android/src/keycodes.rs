@@ -1,8 +1,21 @@
 use android_activity::AndroidApp;
-use android_activity::input::{KeyAction, KeyEvent, KeyMapChar, Keycode};
+use android_activity::input::{KeyAction, KeyEvent, KeyMapChar, Keycode, MetaState};
 use winit_core::keyboard::{
-    Key, KeyCode, KeyLocation, NamedKey, NativeKey, NativeKeyCode, PhysicalKey,
+    Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKey, NativeKeyCode, PhysicalKey,
 };
+
+#[cfg(test)]
+#[path = "keycodes_tests.rs"]
+mod tests;
+
+pub fn modifiers_from_android(state: MetaState) -> ModifiersState {
+    let mut modifiers = ModifiersState::empty();
+    modifiers.set(ModifiersState::SHIFT, state.shift_on() || state.shift_left_on() || state.shift_right_on());
+    modifiers.set(ModifiersState::CONTROL, state.ctrl_on() || state.ctrl_left_on() || state.ctrl_right_on());
+    modifiers.set(ModifiersState::ALT, state.alt_on() || state.alt_left_on() || state.alt_right_on());
+    modifiers.set(ModifiersState::META, state.meta_on() || state.meta_left_on() || state.meta_right_on());
+    modifiers
+}
 
 pub fn to_physical_key(keycode: Keycode) -> PhysicalKey {
     PhysicalKey::Code(match keycode {
@@ -236,6 +249,17 @@ pub fn character_map_and_combine_key(
 }
 
 pub fn to_logical(key_char: Option<KeyMapChar>, keycode: Keycode) -> Key {
+    // Android's character map also returns control characters for named
+    // keys (notably LF for Enter). Preserve key identity before looking at
+    // text: Enter is not Ctrl-J, and Backspace is not Ctrl-H.
+    match keycode {
+        Keycode::Enter | Keycode::NumpadEnter => return Key::Named(NamedKey::Enter),
+        Keycode::Tab => return Key::Named(NamedKey::Tab),
+        Keycode::Del => return Key::Named(NamedKey::Backspace),
+        Keycode::ForwardDel => return Key::Named(NamedKey::Delete),
+        Keycode::Escape => return Key::Named(NamedKey::Escape),
+        _ => {},
+    }
     use android_activity::input::Keycode::*;
 
     let native = NativeKey::Android(keycode.into());

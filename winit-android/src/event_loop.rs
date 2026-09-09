@@ -110,6 +110,7 @@ pub struct EventLoop {
     primary_pointer: Option<FingerId>,
     ignore_volume_keys: bool,
     combining_accent: Option<char>,
+    modifiers: winit_core::keyboard::ModifiersState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -147,6 +148,7 @@ impl EventLoop {
         Ok(Self {
             android_app: android_app.clone(),
             primary_pointer: None,
+            modifiers: Default::default(),
             window_target: ActiveEventLoop {
                 app: android_app.clone(),
                 control_flow: Cell::new(ControlFlow::default()),
@@ -202,6 +204,9 @@ impl EventLoop {
                     app.window_event(&self.window_target, GLOBAL_WINDOW, event);
                 },
                 MainEvent::LostFocus => {
+                    self.modifiers = Default::default();
+                    app.window_event(&self.window_target, GLOBAL_WINDOW,
+                        event::WindowEvent::ModifiersChanged(self.modifiers.into()));
                     HAS_FOCUS.store(false, Ordering::Relaxed);
                     let event = event::WindowEvent::Focused(false);
                     app.window_event(&self.window_target, GLOBAL_WINDOW, event);
@@ -463,6 +468,13 @@ impl EventLoop {
                         input_status = InputStatus::Unhandled
                     },
                     keycode => {
+                        let modifiers = keycodes::modifiers_from_android(key.meta_state());
+                        if modifiers != self.modifiers {
+                            self.modifiers = modifiers;
+                            // Consumers must observe this sample before the key it qualifies.
+                            app.window_event(&self.window_target, GLOBAL_WINDOW,
+                                event::WindowEvent::ModifiersChanged(modifiers.into()));
+                        }
                         let state = match key.action() {
                             KeyAction::Down => event::ElementState::Pressed,
                             KeyAction::Up => event::ElementState::Released,
