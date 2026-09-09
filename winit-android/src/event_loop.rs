@@ -111,6 +111,9 @@ pub struct EventLoop {
     ignore_volume_keys: bool,
     combining_accent: Option<char>,
     modifiers: winit_core::keyboard::ModifiersState,
+    ime: crate::ime::ImeState,
+    ime_epoch: u64,
+    ime_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -149,7 +152,11 @@ impl EventLoop {
             android_app: android_app.clone(),
             primary_pointer: None,
             modifiers: Default::default(),
+            ime: Default::default(),
+            ime_epoch: 0,
+            ime_enabled: false,
             window_target: ActiveEventLoop {
+                ime_control: Default::default(),
                 app: android_app.clone(),
                 control_flow: Cell::new(ControlFlow::default()),
                 exit: Cell::new(false),
@@ -204,6 +211,15 @@ impl EventLoop {
                     app.window_event(&self.window_target, GLOBAL_WINDOW, event);
                 },
                 MainEvent::LostFocus => {
+                    if self.ime_enabled {
+                        self.finish_ime(&self.window_target.app.clone(), app);
+                    }
+                    {
+                        let mut control = self.window_target.ime_control.lock().unwrap();
+                        control.capabilities = None;
+                        control.epoch = control.epoch.wrapping_add(1);
+                    }
+                    self.sync_ime(app);
                     self.modifiers = Default::default();
                     app.window_event(
                         &self.window_target,
@@ -315,6 +331,7 @@ impl EventLoop {
         }
 
         // This is always the last event we dispatch before poll again
+        self.sync_ime(app);
         app.about_to_wait(&self.window_target);
 
         self.pending_redraw = pending_redraw;
@@ -326,9 +343,94 @@ impl EventLoop {
         event: &InputEvent<'_>,
         app: &mut A,
     ) -> InputStatus {
+        self.sync_ime(app);
         let mut input_status = InputStatus::Handled;
         match event {
+            #[cfg(feature = "game-activity")]
+            InputEvent::TextEvent(state) => {
+                if self.ime_enabled {
+                    for event in self.ime.update(state) {
+                        app.window_event(
+                            &self.window_target,
+                            GLOBAL_WINDOW,
+                            event::WindowEvent::Ime(event),
+                        );
+                    }
+                }
+            },
+            #[cfg(feature = "game-activity")]
+            InputEvent::TextAction(action) => {
+                if self.ime_enabled {
+                    use winit_core::keyboard::{KeyCode, ModifiersState, NamedKey};
+
+                    use crate::ime::EditorActionKey;
+                    let (code, named, text, modifiers) =
+                        match EditorActionKey::from_android(*action) {
+                            Some(EditorActionKey::Enter) => {
+                                (KeyCode::Enter, NamedKey::Enter, "\r", ModifiersState::empty())
+                            },
+                            Some(EditorActionKey::Tab { reverse }) => (
+                                KeyCode::Tab,
+                                NamedKey::Tab,
+                                "\t",
+                                if reverse {
+                                    ModifiersState::SHIFT
+                                } else {
+                                    ModifiersState::empty()
+                                },
+                            ),
+                            None => return InputStatus::Unhandled,
+                        };
+                    for event in self.ime.finish() {
+                        app.window_event(
+                            &self.window_target,
+                            GLOBAL_WINDOW,
+                            event::WindowEvent::Ime(event),
+                        );
+                    }
+                    app.window_event(
+                        &self.window_target,
+                        GLOBAL_WINDOW,
+                        event::WindowEvent::ModifiersChanged(modifiers.into()),
+                    );
+                    for state in [event::ElementState::Pressed, event::ElementState::Released] {
+                        app.window_event(
+                            &self.window_target,
+                            GLOBAL_WINDOW,
+                            event::WindowEvent::KeyboardInput {
+                                device_id: None,
+                                event: event::KeyEvent {
+                                    state,
+                                    physical_key: winit_core::keyboard::PhysicalKey::Code(code),
+                                    logical_key: winit_core::keyboard::Key::Named(named),
+                                    location: winit_core::keyboard::KeyLocation::Standard,
+                                    repeat: false,
+                                    text: (state == event::ElementState::Pressed)
+                                        .then(|| text.into()),
+                                    text_with_all_modifiers: (state
+                                        == event::ElementState::Pressed)
+                                        .then(|| text.into()),
+                                    key_without_modifiers: winit_core::keyboard::Key::Named(named),
+                                },
+                                is_synthetic: true,
+                            },
+                        );
+                    }
+                    app.window_event(
+                        &self.window_target,
+                        GLOBAL_WINDOW,
+                        event::WindowEvent::ModifiersChanged(self.modifiers.into()),
+                    );
+                    // The action establishes a new insertion context (for
+                    // example Enter starts a new line or accepts a minibuffer).
+                    android_app.set_text_input_state(Default::default());
+                    self.restart_ime(app);
+                }
+            },
             InputEvent::MotionEvent(motion_event) => {
+                if self.ime_enabled && motion_event.action() == MotionAction::Down {
+                    self.finish_ime(android_app, app);
+                }
                 let device_id = Some(DeviceId::from_raw(motion_event.device_id() as i64));
                 let action = motion_event.action();
 
@@ -460,7 +562,18 @@ impl EventLoop {
                 }
             },
             InputEvent::KeyEvent(key) => {
+                if self.ime_enabled && key.action() == KeyAction::Down {
+                    self.finish_ime(android_app, app);
+                }
                 match key.key_code() {
+                    Keycode::Back if self.ime_enabled => {
+                        let mut control = self.window_target.ime_control.lock().unwrap();
+                        control.capabilities = None;
+                        control.epoch = control.epoch.wrapping_add(1);
+                        drop(control);
+                        android_app.hide_soft_input(false);
+                        self.sync_ime(app);
+                    },
                     // Flag keys related to volume as unhandled. While winit does not have a way for
                     // applications to configure what keys to flag as handled,
                     // this appears to be a good default until winit
@@ -516,6 +629,9 @@ impl EventLoop {
                         };
 
                         app.window_event(&self.window_target, GLOBAL_WINDOW, event);
+                        if self.ime_enabled && key.action() == KeyAction::Down {
+                            self.restart_ime(app);
+                        }
                     },
                 }
             },
@@ -525,6 +641,47 @@ impl EventLoop {
         }
 
         input_status
+    }
+
+    fn sync_ime<A: ApplicationHandler>(&mut self, app: &mut A) {
+        let (epoch, enabled) = {
+            let control = self.window_target.ime_control.lock().unwrap();
+            (control.epoch, control.capabilities.is_some())
+        };
+        if epoch == self.ime_epoch {
+            return;
+        }
+        if self.ime_enabled {
+            app.window_event(
+                &self.window_target,
+                GLOBAL_WINDOW,
+                event::WindowEvent::Ime(event::Ime::Disabled),
+            );
+        }
+        self.ime = Default::default();
+        self.ime_epoch = epoch;
+        self.ime_enabled = enabled;
+        if enabled {
+            app.window_event(
+                &self.window_target,
+                GLOBAL_WINDOW,
+                event::WindowEvent::Ime(event::Ime::Enabled),
+            );
+        }
+    }
+
+    fn finish_ime<A: ApplicationHandler>(&mut self, android_app: &AndroidApp, app: &mut A) {
+        for event in self.ime.finish() {
+            app.window_event(&self.window_target, GLOBAL_WINDOW, event::WindowEvent::Ime(event));
+        }
+        android_app.set_text_input_state(Default::default());
+    }
+
+    fn restart_ime<A: ApplicationHandler>(&mut self, app: &mut A) {
+        let mut control = self.window_target.ime_control.lock().unwrap();
+        control.epoch = control.epoch.wrapping_add(1);
+        drop(control);
+        self.sync_ime(app);
     }
 
     pub fn run_app_on_demand<A: ApplicationHandler>(
@@ -723,6 +880,7 @@ impl EventLoopProxyProvider for EventLoopProxy {
 
 #[derive(Debug)]
 pub struct ActiveEventLoop {
+    ime_control: Arc<Mutex<crate::ime::ImeControl>>,
     pub(crate) app: AndroidApp,
     control_flow: Cell<ControlFlow>,
     exit: Cell<bool>,
@@ -817,7 +975,7 @@ pub struct PlatformSpecificWindowAttributes;
 #[derive(Debug)]
 pub struct Window {
     app: AndroidApp,
-    ime_capabilities: Mutex<Option<ImeCapabilities>>,
+    ime_control: Arc<Mutex<crate::ime::ImeControl>>,
     redraw_requester: RedrawRequester,
 }
 
@@ -836,7 +994,7 @@ impl Window {
 
         Ok(Self {
             app: el.app.clone(),
-            ime_capabilities: Default::default(),
+            ime_control: el.ime_control.clone(),
             redraw_requester: el.redraw_requester.clone(),
         })
     }
@@ -1011,33 +1169,50 @@ impl CoreWindow for Window {
     fn set_ime_cursor_area(&self, _position: Position, _size: Size) {}
 
     fn request_ime_update(&self, request: ImeRequest) -> Result<(), ImeRequestError> {
-        let mut current_caps = self.ime_capabilities.lock().unwrap();
+        if cfg!(feature = "native-activity") {
+            return Err(ImeRequestError::NotSupported);
+        }
+        let mut control = self.ime_control.lock().unwrap();
         match request {
             ImeRequest::Enable(enable) => {
                 let (capabilities, _) = enable.into_raw();
-                if current_caps.is_some() {
+                if capabilities != ImeCapabilities::new() {
+                    return Err(ImeRequestError::NotSupported);
+                }
+                if control.capabilities.is_some() {
                     return Err(ImeRequestError::AlreadyEnabled);
                 }
-                *current_caps = Some(capabilities);
+                control.capabilities = Some(capabilities);
+                control.epoch = control.epoch.wrapping_add(1);
+                self.app.set_text_input_state(Default::default());
                 self.app.show_soft_input(true);
             },
-            ImeRequest::Update(_) => {
-                if current_caps.is_none() {
+            ImeRequest::Update(data) => {
+                if control.capabilities.is_none() {
                     return Err(ImeRequestError::NotEnabled);
+                }
+                if data.surrounding_text.is_some()
+                    || data.hint_and_purpose.is_some()
+                    || data.cursor_area.is_some()
+                {
+                    return Err(ImeRequestError::NotSupported);
                 }
             },
             ImeRequest::Disable => {
-                *current_caps = None;
-                self.app.hide_soft_input(true);
+                control.capabilities = None;
+                control.epoch = control.epoch.wrapping_add(1);
+                self.app.hide_soft_input(false);
             },
             _ => return Err(ImeRequestError::NotSupported),
         }
 
+        drop(control);
+        self.app.create_waker().wake();
         Ok(())
     }
 
     fn ime_capabilities(&self) -> Option<ImeCapabilities> {
-        *self.ime_capabilities.lock().unwrap()
+        self.ime_control.lock().unwrap().capabilities
     }
 
     fn set_ime_purpose(&self, _purpose: ImePurpose) {}
