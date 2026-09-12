@@ -271,11 +271,16 @@ impl EventLoop {
                 },
                 MainEvent::Destroy => {
                     // Exit the loop so `android_main` returns. android-activity
-                    // requires this: "you should return from `android_main()` as
-                    // soon as possible after receiving a `Destroy` event since
-                    // your native thread will be killed", and "most
-                    // `AndroidApp` methods will become a no-op after
-                    // `MainEvent::Destroy` is received".
+                    // requires this: "You should return from `android_main()`
+                    // as soon as possible after receiving a `Destroy` event
+                    // since your native `Activity` no longer exists", and
+                    // "Most `AndroidApp` methods will become a no-op after
+                    // `MainEvent::Destroy` is received, since it no longer has
+                    // an associated `Activity`". The event itself is "Command
+                    // from main thread: the app's activity is being destroyed,
+                    // and waiting for the app thread to clean up and exit
+                    // before proceeding" -- the Java main thread is blocked
+                    // until this thread returns, so not returning is an ANR.
                     //
                     // Swallowing it meant `android_main` never returned on
                     // `onDestroy`. Android spawns a fresh `_rust_glue_entry`
