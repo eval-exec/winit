@@ -270,9 +270,25 @@ impl EventLoop {
                     app.suspended(self.window_target());
                 },
                 MainEvent::Destroy => {
-                    // XXX: maybe exit mainloop to drop things before being
-                    // killed by the OS?
-                    warn!("TODO: forward onDestroy notification to application");
+                    // Exit the loop so `android_main` returns. android-activity
+                    // requires this: "you should return from `android_main()` as
+                    // soon as possible after receiving a `Destroy` event since
+                    // your native thread will be killed", and "most
+                    // `AndroidApp` methods will become a no-op after
+                    // `MainEvent::Destroy` is received".
+                    //
+                    // Swallowing it meant `android_main` never returned on
+                    // `onDestroy`. Android spawns a fresh `_rust_glue_entry`
+                    // per Activity, so an Activity recreation (back stack,
+                    // "Don't keep activities", a config change outside
+                    // `configChanges`) left the previous loop running and
+                    // started a SECOND one in the same process -- two
+                    // applications sharing one process and one data directory.
+                    //
+                    // `ApplicationHandler` has no destroy hook, so exiting is
+                    // how an application observes this: `run_app` returns.
+                    debug!("App Destroyed - exiting the event loop");
+                    self.window_target().exit();
                 },
                 MainEvent::InsetsChanged { .. } => {
                     // XXX: how to forward this state to applications?
