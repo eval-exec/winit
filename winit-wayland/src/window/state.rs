@@ -1002,22 +1002,23 @@ impl WindowState {
         });
     }
 
-    /// Set maximum inner window size.
+    /// Set minimum inner window size.
     pub fn set_min_surface_size(&mut self, size: Option<LogicalSize<u32>>) {
         if let WindowType::Window { window, .. } = &self.window {
             // Ensure that the window has the right minimum size.
             let mut size = size.unwrap_or(MIN_WINDOW_SIZE);
             size.width = size.width.max(MIN_WINDOW_SIZE.width);
             size.height = size.height.max(MIN_WINDOW_SIZE.height);
+            // Configure snapping and hint reloads operate on inner sizes.
+            self.min_surface_size = size;
 
-            // Add the borders.
+            // Only the compositor constraint includes client decorations.
             let size = self
                 .frame
                 .as_ref()
                 .map(|frame| frame.add_borders(size.width, size.height).into())
                 .unwrap_or(size);
 
-            self.min_surface_size = size;
             window.set_min_size(Some(size.into()));
         }
     }
@@ -1025,6 +1026,7 @@ impl WindowState {
     /// Set maximum inner window size.
     pub fn set_max_surface_size(&mut self, size: Option<LogicalSize<u32>>) {
         if let WindowType::Window { window, .. } = &self.window {
+            self.max_surface_size = size;
             let size = size.map(|size| {
                 self.frame
                     .as_ref()
@@ -1032,7 +1034,6 @@ impl WindowState {
                     .unwrap_or(size)
             });
 
-            self.max_surface_size = size;
             window.set_max_size(size.map(Into::into));
         }
     }
