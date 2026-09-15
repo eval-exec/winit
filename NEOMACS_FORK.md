@@ -1,10 +1,20 @@
 # Neomacs integration fork
 
-`eval-exec/winit` uses `master` as its maintained Neomacs integration branch.
-Keep upstream history and the required platform fixes together here; Neomacs
-pins an exact commit from this branch. Topic branches are not separate release
-channels. The local `origin` remote is upstream `rust-windowing/winit`; `fork`
-is `eval-exec/winit`.
+`neomacs-android-wayland-integration` combines the Android fixes used by
+Neomacs's Android/WASM branch with the Wayland inner-size-limit fix used by
+Neomacs main. It starts from `5bf5cc78` and includes the change from
+`f24b3339`, without changing the fork's `master` branch.
+
+Neomacs selects this branch in `Cargo.toml`; its committed `Cargo.lock`
+records the resolved revision for reproducible builds. The local `origin`
+remote is upstream `rust-windowing/winit`; `fork` is `eval-exec/winit`.
+
+## Wayland size limits
+
+Keep cached minimum and maximum surface sizes in inner-surface coordinates.
+Client-side decoration borders are added only when sending constraints to
+the compositor, so configure snapping and subsequent hint reloads do not
+count those borders twice.
 
 ## Wayland popup lifetime
 
