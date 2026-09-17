@@ -1,7 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
-use std::mem::MaybeUninit;
-use std::os::raw::{c_char, c_int, c_long, c_ulong};
+use std::os::raw::{c_int, c_long, c_ulong};
 use std::slice;
 use std::sync::{Arc, Mutex};
 
@@ -22,9 +21,9 @@ use x11_dl::xinput2::{
     XILeaveEvent, XIModifierState, XIRawEvent,
 };
 use x11_dl::xlib::{
-    self, Display as XDisplay, Window as XWindow, XAnyEvent, XClientMessageEvent, XConfigureEvent,
-    XDestroyWindowEvent, XEvent, XExposeEvent, XKeyEvent, XMapEvent, XPropertyEvent,
-    XReparentEvent, XSelectionEvent, XVisibilityEvent, XkbAnyEvent, XkbStateRec,
+    self, Window as XWindow, XAnyEvent, XClientMessageEvent, XConfigureEvent, XDestroyWindowEvent,
+    XEvent, XExposeEvent, XKeyEvent, XMapEvent, XPropertyEvent, XReparentEvent, XSelectionEvent,
+    XVisibilityEvent, XkbAnyEvent, XkbStateRec,
 };
 use x11rb::protocol::sync::{ConnectionExt, Int64};
 use x11rb::protocol::xinput;
@@ -290,40 +289,6 @@ impl EventProcessor {
                 }
             },
         }
-    }
-
-    pub fn poll(&self) -> bool {
-        unsafe { (self.target.xconn.xlib.XPending)(self.target.xconn.display) != 0 }
-    }
-
-    pub fn poll_one_event<'a>(
-        &mut self,
-        event_ptr: &'a mut MaybeUninit<XEvent>,
-    ) -> Option<&'a mut XEvent> {
-        // This function is used to poll and remove a single event
-        // from the Xlib event queue in a non-blocking, atomic way.
-        // XCheckIfEvent is non-blocking and removes events from queue.
-        // XNextEvent can't be used because it blocks while holding the
-        // global Xlib mutex.
-        // XPeekEvent does not remove events from the queue.
-        unsafe extern "C" fn predicate(
-            _display: *mut XDisplay,
-            _event: *mut XEvent,
-            _filter: *mut c_char,
-        ) -> c_int {
-            1
-        }
-
-        let event_initialized = unsafe {
-            (self.target.xconn.xlib.XCheckIfEvent)(
-                self.target.xconn.display,
-                event_ptr.as_mut_ptr(),
-                Some(predicate),
-                std::ptr::null_mut(),
-            ) != 0
-        };
-
-        event_initialized.then(|| unsafe { event_ptr.assume_init_mut() })
     }
 
     pub fn init_device(&self, device: xinput::DeviceId) {
