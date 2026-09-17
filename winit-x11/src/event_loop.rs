@@ -11,9 +11,8 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant};
 use std::{fmt, mem, ptr, slice, str};
 
-use calloop::generic::Generic;
+use calloop::EventLoop as Loop;
 use calloop::ping::Ping;
-use calloop::{EventLoop as Loop, Readiness};
 use libc::{LC_CTYPE, setlocale};
 use tracing::warn;
 use winit_common::xkb::Context;
@@ -43,6 +42,7 @@ use crate::atoms::{
 };
 use crate::dnd::Dnd;
 use crate::event_processor::{EventProcessor, MAX_MOD_REPLAY_LEN};
+use crate::event_queue::NativeEventQueue;
 use crate::ime::{self, Ime, ImeCreationError, ImeSender};
 use crate::util::{self, CustomCursor};
 use crate::window::{UnownedWindow, Window};
@@ -56,8 +56,6 @@ pub(crate) const ICONIC_STATE: u32 = 3;
 
 /// The underlying x11rb connection that we are using.
 type X11rbConnection = x11rb::xcb_ffi::XCBConnection;
-
-type X11Source = Generic<BorrowedFd<'static>>;
 
 pub(crate) static X11_BACKEND: LazyLock<Mutex<Result<Arc<XConnection>, XNotSupported>>> =
     LazyLock::new(|| Mutex::new(XConnection::new(Some(x_error_callback)).map(Arc::new)));
@@ -190,6 +188,8 @@ pub struct ActiveEventLoop {
 
 #[derive(Debug)]
 pub struct EventLoop {
+    // Stop and join the native reader before releasing the loop or processor.
+    event_queue: NativeEventQueue,
     loop_running: bool,
     event_loop: Loop<'static, EventLoopState>,
     event_processor: EventProcessor,
@@ -204,9 +204,6 @@ pub(crate) type ActivationItem = (WindowId, winit_core::event_loop::AsyncRequest
 
 #[derive(Debug)]
 struct EventLoopState {
-    /// The latest readiness state for the x11 file descriptor
-    x11_readiness: Readiness,
-
     /// User requested a wake up.
     proxy_wake_up: bool,
 }
@@ -311,22 +308,6 @@ impl EventLoop {
         // Create an event loop.
         let event_loop =
             Loop::<EventLoopState>::try_new().expect("Failed to initialize the event loop");
-        let handle = event_loop.handle();
-
-        // Create the X11 event dispatcher.
-        let source = X11Source::new(
-            // SAFETY: xcb owns the FD and outlives the source.
-            unsafe { BorrowedFd::borrow_raw(xconn.xcb_connection().as_raw_fd()) },
-            calloop::Interest::READ,
-            calloop::Mode::Level,
-        );
-        handle
-            .insert_source(source, |readiness, _, state| {
-                state.x11_readiness = readiness;
-                Ok(calloop::PostAction::Continue)
-            })
-            .expect("Failed to register the X11 event dispatcher");
-
         let (waker, waker_source) =
             calloop::ping::make_ping().expect("Failed to create event loop waker");
         event_loop
@@ -431,13 +412,15 @@ impl EventLoop {
 
         event_processor.init_device(ALL_DEVICES);
 
+        let event_queue = NativeEventQueue::new(event_processor.target.xconn.clone(), waker)?;
         let event_loop = EventLoop {
+            event_queue,
             loop_running: false,
             event_loop,
             event_processor,
             redraw_receiver: PeekableReceiver::from_recv(redraw_channel),
             activation_receiver: PeekableReceiver::from_recv(activation_token_channel),
-            state: EventLoopState { x11_readiness: Readiness::EMPTY, proxy_wake_up: false },
+            state: EventLoopState { proxy_wake_up: false },
         };
 
         Ok(event_loop)
@@ -506,7 +489,7 @@ impl EventLoop {
     }
 
     fn has_pending(&mut self) -> bool {
-        self.event_processor.poll()
+        self.event_queue.is_ready()
             || self.state.proxy_wake_up
             || self.redraw_receiver.has_incoming()
     }
@@ -535,7 +518,6 @@ impl EventLoop {
             min_timeout(control_flow_timeout, timeout)
         };
 
-        self.state.x11_readiness = Readiness::EMPTY;
         if let Err(error) =
             self.event_loop.dispatch(timeout, &mut self.state).map_err(std::io::Error::from)
         {
@@ -639,9 +621,12 @@ impl EventLoop {
     }
 
     fn drain_events<A: ApplicationHandler>(&mut self, app: &mut A) {
+        let Some(mut pending) = self.event_queue.try_drain() else {
+            return;
+        };
         let mut xev = MaybeUninit::uninit();
 
-        while let Some(xev) = self.event_processor.poll_one_event(&mut xev) {
+        while let Some(xev) = pending.next(&mut xev) {
             self.event_processor.process_event(xev, app);
         }
     }
