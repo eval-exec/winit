@@ -20,6 +20,7 @@ mod atoms;
 mod dnd;
 mod event_loop;
 mod event_processor;
+mod event_queue;
 pub mod ffi;
 mod ime;
 mod monitor;
