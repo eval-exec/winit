@@ -1595,6 +1595,14 @@ pub enum MouseScrollDelta {
     /// right and down (revealing more content left and up).
     LineDelta(f32, f32),
 
+    /// Continuous scroll-axis motion in normalized scroll units, as reported
+    /// by XInput2 valuators. One unit is the device's scroll increment; it is
+    /// not a pixel distance or a discrete wheel-button press. Applications
+    /// choose the pixel distance for a unit using their viewport geometry.
+    /// Fractional and multi-unit motion retain the same meaning.
+    /// Positive values move content right/down, like the other variants.
+    ContinuousLineDelta(f32, f32),
+
     /// Amount in pixels to scroll in the horizontal and
     /// vertical direction.
     ///
