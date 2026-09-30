@@ -49,6 +49,17 @@ pub const MAX_MOD_REPLAY_LEN: usize = 32;
 /// The X11 documentation states: "Keycodes lie in the inclusive range `[8, 255]`".
 const KEYCODE_OFFSET: u8 = 8;
 
+fn continuous_scroll_delta(orientation: ScrollOrientation, delta: f64) -> MouseScrollDelta {
+    match orientation {
+        ScrollOrientation::Horizontal => MouseScrollDelta::ContinuousLineDelta(-delta as f32, 0.0),
+        ScrollOrientation::Vertical => MouseScrollDelta::ContinuousLineDelta(0.0, -delta as f32),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/continuous_scroll_test.rs"]
+mod continuous_scroll_test;
+
 #[derive(Debug)]
 pub struct EventProcessor {
     pub ime_receiver: ImeReceiver,
@@ -1198,13 +1209,11 @@ impl EventProcessor {
                 let delta = (x - info.position) / info.increment;
                 info.position = x;
                 // X11 vertical scroll coordinates are opposite to winit's
-                let delta = match info.orientation {
-                    ScrollOrientation::Horizontal => {
-                        MouseScrollDelta::LineDelta(-delta as f32, 0.0)
-                    },
-                    ScrollOrientation::Vertical => MouseScrollDelta::LineDelta(0.0, -delta as f32),
-                };
+                let delta = continuous_scroll_delta(info.orientation, delta);
 
+                // Keep the physical source: the master pointer is shared by
+                // independent mice/touchpads with different scroll streams.
+                let device_id = Some(mkdid(event.sourceid as xinput::DeviceId));
                 let event = WindowEvent::MouseWheel { device_id, delta, phase: TouchPhase::Moved };
                 events.push(event);
             }
