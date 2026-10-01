@@ -39,6 +39,7 @@ struct Shared {
     contact: Cell<bool>,
     resetting: Cell<bool>,
     bounds: Cell<[i32; 2]>,
+    failed: Cell<bool>,
 }
 impl Shared {
     fn finish(&self, phase: TouchPhase) -> bool {
@@ -58,7 +59,6 @@ pub(crate) struct PrecisionTouchpad {
     cookie: Option<u32>,
     window: HWND,
     shared: Rc<Shared>,
-    failed: Cell<bool>,
     // Declared last so every COM interface is released before uninitialization.
     _apartment: Apartment,
 }
@@ -82,7 +82,6 @@ impl PrecisionTouchpad {
             cookie: None,
             window,
             shared,
-            failed: Cell::new(false),
             _apartment: apartment,
         };
         unsafe {
@@ -113,7 +112,7 @@ impl PrecisionTouchpad {
     }
 
     pub(crate) fn claim_contact(&self, pointer_id: u32) -> bool {
-        if self.failed.get() {
+        if self.shared.failed.get() {
             return false;
         }
         let Some(get_type) = *GET_POINTER_TYPE else {
@@ -136,14 +135,14 @@ impl PrecisionTouchpad {
     }
 
     pub(crate) fn needs_update(&self) -> bool {
-        !self.failed.get() && (self.shared.contact.get() || self.shared.resetting.get())
+        !self.shared.failed.get() && (self.shared.contact.get() || self.shared.resetting.get())
     }
 
     pub(crate) fn poll(&self) -> Vec<Packet> {
         if self.needs_update() {
             if let Err(error) = unsafe { self.updates.Update(None) } {
                 tracing::warn!(%error, "precision touchpad update failed; restoring wheel fallback");
-                self.failed.set(true);
+                self.shared.failed.set(true);
                 self.shared.finish(TouchPhase::Cancelled);
                 self.shared.resetting.set(false);
                 unsafe {
@@ -187,18 +186,12 @@ impl PrecisionTouchpad {
             })
         } {
             tracing::warn!(%error, "precision touchpad viewport resize failed");
-            self.failed.set(true);
+            self.shared.failed.set(true);
         }
     }
 
     fn rebase(&self) -> Result<()> {
-        self.shared.resetting.set(true);
-        let [w, h] = self.shared.bounds.get();
-        if let Err(e) = unsafe { self.viewport.ZoomToRect(0.0, 0.0, w as f32, h as f32, false) } {
-            self.shared.resetting.set(false);
-            return Err(e);
-        }
-        Ok(())
+        rebase_viewport(&self.shared, &self.viewport)
     }
 }
 
@@ -214,6 +207,20 @@ impl Drop for PrecisionTouchpad {
             let _ = self.manager.Deactivate(self.window);
         }
     }
+}
+
+// A failed reset cannot safely establish the origin of a later gesture.
+// Restore wheel fallback rather than expose the previous native translation.
+fn rebase_viewport(shared: &Shared, viewport: &IDirectManipulationViewport) -> Result<()> {
+    shared.resetting.set(true);
+    let [w, h] = shared.bounds.get();
+    if let Err(error) = unsafe { viewport.ZoomToRect(0.0, 0.0, w as f32, h as f32, false) } {
+        shared.resetting.set(false);
+        shared.failed.set(true);
+        tracing::warn!(%error, "precision touchpad reset failed; restoring wheel fallback");
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[windows_core::implement(IDirectManipulationViewportEventHandler, Agile = false)]
@@ -236,19 +243,17 @@ impl IDirectManipulationViewportEventHandler_Impl for Handler_Impl {
                 return Ok(());
             }
             if self.shared.finish(TouchPhase::Ended) {
-                let viewport = viewport.as_ref().ok_or(E_POINTER)?;
-                self.shared.resetting.set(true);
-                let [w, h] = self.shared.bounds.get();
-                if let Err(e) = unsafe { viewport.ZoomToRect(0.0, 0.0, w as f32, h as f32, false) }
-                {
-                    self.shared.resetting.set(false);
-                    return Err(e);
-                }
+                rebase_viewport(&self.shared, viewport.as_ref().ok_or(E_POINTER)?)?;
             }
-        } else if current == DIRECTMANIPULATION_DISABLED || current == DIRECTMANIPULATION_SUSPENDED {
-            self.shared.finish(TouchPhase::Cancelled);
+        } else if current == DIRECTMANIPULATION_DISABLED || current == DIRECTMANIPULATION_SUSPENDED
+        {
+            let changed = self.shared.finish(TouchPhase::Cancelled);
             self.shared.resetting.set(false);
+            if changed {
+                rebase_viewport(&self.shared, viewport.as_ref().ok_or(E_POINTER)?)?;
+            }
         }
+
         Ok(())
     }
     fn OnViewportUpdated(&self, _viewport: Ref<'_, IDirectManipulationViewport>) -> Result<()> {

@@ -75,3 +75,33 @@ fn cancellation_delivers_terminal_phase_and_resets_native_transform() {
     assert_eq!(packets[0].delta, [0.0; 2]);
     assert_eq!(bridge.shared.motion.borrow_mut().finish(TouchPhase::Ended).0, None);
 }
+
+#[test]
+fn native_suspension_cancels_and_rebases_the_next_gesture_origin() {
+    let window = NativeWindow::new();
+    let bridge = PrecisionTouchpad::new(window.0).unwrap();
+    bridge.shared.contact.set(true);
+    bridge.shared.motion.borrow_mut().update([0.125, -0.25]);
+    // Synthetic status delivered through the real COM callback interface.
+    // This does not inject or prove physical touchpad delivery.
+    let handler: IDirectManipulationViewportEventHandler =
+        Handler { shared: bridge.shared.clone() }.into();
+    unsafe {
+        handler
+            .OnViewportStatusChanged(
+                &bridge.viewport,
+                DIRECTMANIPULATION_SUSPENDED,
+                DIRECTMANIPULATION_RUNNING,
+            )
+            .unwrap();
+    }
+    assert!(!bridge.shared.contact.get());
+    let packets = bridge.poll();
+    assert_eq!(packets.len(), 1);
+    assert_eq!(packets[0].phase, TouchPhase::Cancelled);
+    assert!(!bridge.needs_update());
+    assert_eq!(
+        bridge.shared.motion.borrow_mut().update([0.125, 0.25]).unwrap().delta,
+        [0.125, 0.25]
+    );
+}
