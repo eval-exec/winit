@@ -69,6 +69,7 @@ fn cancellation_delivers_terminal_phase_and_resets_native_transform() {
     bridge.shared.motion.borrow_mut().update([0.125, -0.25]);
     bridge.cancel();
     let packets = bridge.poll();
+    assert!(!bridge.needs_update(), "identity reset left idle polling enabled");
     assert_eq!(packets.len(), 1);
     assert_eq!(packets[0].phase, TouchPhase::Cancelled);
     assert_eq!(packets[0].delta, [0.0; 2]);

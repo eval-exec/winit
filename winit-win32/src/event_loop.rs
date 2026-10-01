@@ -361,8 +361,10 @@ impl EventLoop {
         // `MsgWaitForMultipleObjectsEx`.
         //
         self.runner.prepare_wait();
-        let timeout = min_timeout(timeout, self.next_touchpad_update
-            .map(|at| at.saturating_duration_since(Instant::now())));
+        let timeout = min_timeout(
+            timeout,
+            self.next_touchpad_update.map(|at| at.saturating_duration_since(Instant::now())),
+        );
         wait_for_messages_impl(
             &mut self.high_resolution_timer,
             self.runner.control_flow(),
@@ -1002,8 +1004,7 @@ impl LazyMessageId {
     }
 }
 
-// Message sent by the `EventLoopProxy` when we want to wake up the thread.
-// WPARAM and LPARAM are unused.
+// Private synchronous update message on the HWND-owning thread.
 static PRECISION_TOUCHPAD_UPDATE_MSG: LazyMessageId =
     LazyMessageId::new("Winit::PrecisionTouchpadUpdate\0");
 
@@ -1042,6 +1043,8 @@ fn poll_precision_touchpad_windows() -> bool {
     active
 }
 
+// Message sent by the `EventLoopProxy` when we want to wake up the thread.
+// WPARAM and LPARAM are unused.
 static USER_EVENT_MSG_ID: LazyMessageId = LazyMessageId::new("Winit::WakeupMsg\0");
 // Message sent when we want to execute a closure in the thread.
 // WPARAM contains a Box<Box<dyn FnMut()>> that must be retrieved with `Box::from_raw`,
