@@ -111,6 +111,7 @@ pub(crate) struct WindowData {
     pub event_loop_runner: Rc<EventLoopRunner>,
     pub key_event_builder: KeyEventBuilder,
     pub _file_drop_handler: Option<FileDropHandler>,
+    pub precision_touchpad: Option<crate::precision_touchpad::PrecisionTouchpad>,
     pub userdata_removed: Cell<bool>,
     pub last_tablet_down_button_state: Cell<u32>,
     pub recurse_depth: Cell<u32>,
@@ -120,6 +121,33 @@ impl WindowData {
     fn send_window_event(&self, window: HWND, event: WindowEvent) {
         let window_id = WindowId::from_raw(window as usize);
         self.event_loop_runner.send_event(Event::Window { window_id, event });
+    }
+
+    fn poll_precision_touchpad(&self, window: HWND) -> bool {
+        let Some(bridge) = &self.precision_touchpad else {
+            return false;
+        };
+        let packets = bridge.poll();
+        if !packets.is_empty() {
+            update_modifiers(window, self);
+        }
+        for packet in packets {
+            if self.userdata_removed.get() {
+                return false;
+            }
+            self.send_window_event(
+                window,
+                WindowEvent::MouseWheel {
+                    device_id: None,
+                    delta: winit_core::event::MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                        packet.delta[0],
+                        packet.delta[1],
+                    )),
+                    phase: packet.phase,
+                },
+            );
+        }
+        !self.userdata_removed.get() && bridge.needs_update()
     }
 
     fn window_state_lock(&self) -> MutexGuard<'_, WindowState> {
@@ -155,6 +183,7 @@ pub struct EventLoop {
     // It is created lazily in case if we have `ControlFlow::WaitUntil`.
     // Keep it as a field to avoid recreating it on every `ControlFlow::WaitUntil`.
     high_resolution_timer: Option<OwnedHandle>,
+    next_touchpad_update: Option<Instant>,
 }
 
 impl fmt::Debug for EventLoop {
@@ -245,6 +274,7 @@ impl EventLoop {
             runner: runner_shared,
             msg_hook: attributes.msg_hook.take(),
             high_resolution_timer: None,
+            next_touchpad_update: None,
         })
     }
 
@@ -331,6 +361,8 @@ impl EventLoop {
         // `MsgWaitForMultipleObjectsEx`.
         //
         self.runner.prepare_wait();
+        let timeout = min_timeout(timeout, self.next_touchpad_update
+            .map(|at| at.saturating_duration_since(Instant::now())));
         wait_for_messages_impl(
             &mut self.high_resolution_timer,
             self.runner.control_flow(),
@@ -385,6 +417,12 @@ impl EventLoop {
             if self.runner.interrupt_msg_dispatch.get() {
                 break;
             }
+        }
+        self.next_touchpad_update = poll_precision_touchpad_windows()
+            .then(|| Instant::now() + Duration::from_millis(8));
+        if let Err(payload) = self.runner.take_panic_error() {
+            self.runner.reset_runner();
+            panic::resume_unwind(payload);
         }
     }
 
@@ -966,6 +1004,44 @@ impl LazyMessageId {
 
 // Message sent by the `EventLoopProxy` when we want to wake up the thread.
 // WPARAM and LPARAM are unused.
+static PRECISION_TOUCHPAD_UPDATE_MSG: LazyMessageId =
+    LazyMessageId::new("Winit::PrecisionTouchpadUpdate\0");
+
+// Enter through the window procedure so its reentrancy lifetime guard protects
+// WindowData even when delivering a wheel callback synchronously destroys a window.
+fn poll_precision_touchpad_windows() -> bool {
+    unsafe extern "system" fn visit(hwnd: HWND, result: LPARAM) -> BOOL {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GWLP_WNDPROC, SendMessageW};
+        if unsafe { util::get_window_long(hwnd, GWLP_WNDPROC) }
+            == public_window_callback as *const () as isize
+        {
+            if unsafe { SendMessageW(hwnd, PRECISION_TOUCHPAD_UPDATE_MSG.get(), 0, 0) } != 0 {
+                unsafe {
+                    *(result as *mut bool) = true;
+                }
+            }
+        }
+        true.into()
+    }
+    unsafe extern "system" fn visit_thread_window(hwnd: HWND, result: LPARAM) -> BOOL {
+        use windows_sys::Win32::UI::WindowsAndMessaging::EnumChildWindows;
+        unsafe {
+            visit(hwnd, result);
+            EnumChildWindows(hwnd, Some(visit), result);
+        }
+        true.into()
+    }
+    let mut active = false;
+    unsafe {
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(visit_thread_window),
+            &mut active as *mut bool as LPARAM,
+        );
+    }
+    active
+}
+
 static USER_EVENT_MSG_ID: LazyMessageId = LazyMessageId::new("Winit::WakeupMsg\0");
 // Message sent when we want to execute a closure in the thread.
 // WPARAM contains a Box<Box<dyn FnMut()>> that must be retrieved with `Box::from_raw`,
@@ -1105,6 +1181,10 @@ unsafe fn gain_active_focus(window: HWND, userdata: &WindowData) {
 }
 
 unsafe fn lose_active_focus(window: HWND, userdata: &WindowData) {
+    if let Some(bridge) = &userdata.precision_touchpad {
+        bridge.cancel();
+        userdata.poll_precision_touchpad(window);
+    }
     use winit_core::event::WindowEvent::{Focused, ModifiersChanged};
 
     userdata.window_state_lock().modifiers_state = ModifiersState::empty();
@@ -1246,6 +1326,17 @@ unsafe fn public_window_callback_inner(
     // the closure to catch_unwind directly so that the match body indentation wouldn't change and
     // the git blame and history would be preserved.
     let callback = || match msg {
+        m if m == PRECISION_TOUCHPAD_UPDATE_MSG.get() => {
+            result = ProcResult::Value(userdata.poll_precision_touchpad(window) as LRESULT);
+        },
+        windows_sys::Win32::UI::WindowsAndMessaging::DM_POINTERHITTEST => {
+            if let Some(bridge) = &userdata.precision_touchpad {
+                if bridge.claim_contact(util::loword(wparam as u32) as u32) {
+                    userdata.poll_precision_touchpad(window);
+                    result = ProcResult::Value(0);
+                }
+            }
+        },
         WM_NCCALCSIZE => {
             let window_flags = userdata.window_state_lock().window_flags;
             if wparam == 0 || window_flags.contains(WindowFlags::MARKER_DECORATIONS) {
@@ -1342,6 +1433,9 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_DESTROY => {
+            if let Some(bridge) = &userdata.precision_touchpad {
+                bridge.cancel();
+            }
             use winit_core::event::WindowEvent::Destroyed;
             unsafe { RevokeDragDrop(window) };
             userdata.send_window_event(window, Destroyed);
@@ -1484,6 +1578,11 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_SIZE => {
+            if let Some(bridge) = &userdata.precision_touchpad {
+                bridge
+                    .resize(util::loword(lparam as u32) as u32, util::hiword(lparam as u32) as u32);
+                userdata.poll_precision_touchpad(window);
+            }
             use winit_core::event::WindowEvent::SurfaceResized;
             let w = util::loword(lparam as u32) as u32;
             let h = util::hiword(lparam as u32) as u32;
@@ -2385,6 +2484,10 @@ unsafe fn public_window_callback_inner(
         // Only sent on Windows 8.1 or newer. On Windows 7 and older user has to log out to change
         // DPI, therefore all applications are closed while DPI is changing.
         WM_DPICHANGED => {
+            if let Some(bridge) = &userdata.precision_touchpad {
+                bridge.cancel();
+                userdata.poll_precision_touchpad(window);
+            }
             use winit_core::event::WindowEvent::ScaleFactorChanged;
 
             // This message actually provides two DPI values - x and y. However MSDN says that

@@ -24,6 +24,8 @@ winit-common = { workspace = true, features = ["positioner"] }
 winit-core.workspace = true
 
 # Platform-specific
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_DirectManipulation", "Win32_System_Com"] }
+windows-core = "0.62.2"
 unicode-segmentation.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Devices_HumanInterfaceDevice",

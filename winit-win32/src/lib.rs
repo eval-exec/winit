@@ -17,6 +17,7 @@ mod ime;
 mod keyboard;
 mod keyboard_layout;
 mod monitor;
+mod precision_touchpad;
 mod raw_input;
 mod window;
 mod window_state;
@@ -477,6 +478,7 @@ pub struct WindowAttributesWindows {
     pub(crate) title_text_color: Option<Color>,
     pub(crate) corner_preference: Option<CornerPreference>,
     pub(crate) use_system_wheel_speed: bool,
+    pub(crate) precision_touchpad: bool,
 }
 
 impl Default for WindowAttributesWindows {
@@ -497,6 +499,7 @@ impl Default for WindowAttributesWindows {
             title_text_color: None,
             corner_preference: None,
             use_system_wheel_speed: true,
+            precision_touchpad: false,
         }
     }
 }
@@ -627,6 +630,14 @@ impl WindowAttributesWindows {
     /// Supported starting with Windows 11 Build 22000.
     pub fn with_corner_preference(mut self, corners: CornerPreference) -> Self {
         self.corner_preference = Some(corners);
+        self
+    }
+
+    /// Enable pixel-precise Windows touchpad panning through DirectManipulation.
+    /// Falls back to ordinary wheel events if native initialization is unavailable.
+    /// Inertia is not enabled. The default is false.
+    pub fn with_precision_touchpad(mut self, enabled: bool) -> Self {
+        self.precision_touchpad = enabled;
         self
     }
 

@@ -1478,6 +1478,17 @@ impl InitData<'_> {
             event_loop_runner: self.runner.clone(),
             key_event_builder: KeyEventBuilder::default(),
             _file_drop_handler: file_drop_handler,
+            precision_touchpad: if self.win_attributes.precision_touchpad {
+                match crate::precision_touchpad::PrecisionTouchpad::new(win.window.hwnd()) {
+                    Ok(bridge) => Some(bridge),
+                    Err(error) => {
+                        tracing::warn!(%error, "precision touchpad unavailable; using wheel input");
+                        None
+                    },
+                }
+            } else {
+                None
+            },
             userdata_removed: Cell::new(false),
             recurse_depth: Cell::new(0),
             last_tablet_down_button_state: Cell::new(0),
