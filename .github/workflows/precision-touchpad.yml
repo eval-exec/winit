@@ -1,0 +1,23 @@
+name: Precision touchpad contracts
+on:
+  push:
+    branches: [patch]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native viewport, transform and lifecycle contracts
+        run: cargo test -p winit-win32 --lib precision_touchpad:: -- --test-threads=1
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Preserve AppKit backend compilation
+        run: cargo check -p winit --all-targets
