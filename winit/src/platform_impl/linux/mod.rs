@@ -29,10 +29,24 @@ pub(crate) enum Backend {
     Wayland,
 }
 
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct PlatformSpecificEventLoopAttributes {
     pub(crate) forced_backend: Option<Backend>,
     pub(crate) any_thread: bool,
+    #[cfg(wayland_platform)]
+    pub(crate) wayland_connection: Option<wayland::WaylandConnection>,
+}
+
+impl std::hash::Hash for PlatformSpecificEventLoopAttributes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.forced_backend.hash(state);
+        self.any_thread.hash(state);
+        #[cfg(wayland_platform)]
+        self.wayland_connection
+            .as_ref()
+            .map(|connection| connection.backend().display_id())
+            .hash(state);
+    }
 }
 
 /// `x11_or_wayland!(match expr; Enum(foo) => foo.something())`
@@ -86,6 +100,13 @@ impl EventLoop {
             );
         }
 
+        #[cfg(wayland_platform)]
+        if attributes.forced_backend == Some(Backend::Wayland)
+            && attributes.wayland_connection.is_some()
+        {
+            return Self::new_wayland_any_thread(attributes);
+        }
+
         // NOTE: Wayland first because of X11 could be present under Wayland as well. Empty
         // variables are also treated as not set.
         let backend = match (
@@ -124,15 +145,21 @@ impl EventLoop {
         // Create the display based on the backend.
         match backend {
             #[cfg(wayland_platform)]
-            Backend::Wayland => EventLoop::new_wayland_any_thread(),
+            Backend::Wayland => EventLoop::new_wayland_any_thread(attributes),
             #[cfg(x11_platform)]
             Backend::X => EventLoop::new_x11_any_thread(),
         }
     }
 
     #[cfg(wayland_platform)]
-    fn new_wayland_any_thread() -> Result<EventLoop, EventLoopError> {
-        wayland::EventLoop::new().map(|evlp| EventLoop::Wayland(Box::new(evlp)))
+    fn new_wayland_any_thread(
+        attributes: &PlatformSpecificEventLoopAttributes,
+    ) -> Result<EventLoop, EventLoopError> {
+        let event_loop = match &attributes.wayland_connection {
+            Some(connection) => wayland::EventLoop::new_with_connection(connection.clone()),
+            None => wayland::EventLoop::new(),
+        };
+        event_loop.map(|evlp| EventLoop::Wayland(Box::new(evlp)))
     }
 
     #[cfg(x11_platform)]
