@@ -378,6 +378,15 @@ impl winit_wayland::EventLoopBuilderExtWayland for EventLoopBuilder {
     }
 
     #[inline]
+    fn with_wayland_connection(
+        &mut self,
+        connection: winit_wayland::WaylandConnection,
+    ) -> &mut Self {
+        self.platform_specific.wayland_connection = Some(connection);
+        self.with_wayland()
+    }
+
+    #[inline]
     fn with_any_thread(&mut self, any_thread: bool) -> &mut Self {
         self.platform_specific.any_thread = any_thread;
         self

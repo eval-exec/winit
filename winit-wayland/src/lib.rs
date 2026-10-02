@@ -51,6 +51,8 @@ pub use self::dnd::{DataOffer, DragSource, MimeData, MimeType};
 pub use self::event_loop::{ActiveEventLoop, EventLoop};
 pub use self::popup::Popup;
 pub use self::window::Window;
+/// An owned connection to a Wayland compositor.
+pub use wayland_client::Connection as WaylandConnection;
 
 /// Additional methods on [`ActiveEventLoop`] that are specific to Wayland.
 pub trait ActiveEventLoopExtWayland {
@@ -75,6 +77,20 @@ pub trait EventLoopExtWayland {
 pub trait EventLoopBuilderExtWayland {
     /// Force using Wayland.
     fn with_wayland(&mut self) -> &mut Self;
+
+    /// Use an owned Wayland connection instead of connecting through the environment.
+    ///
+    /// This also selects the Wayland backend. The connection is retained by the builder;
+    /// the event loop holds its own clone and creates its own event queue. Existing queues
+    /// on this connection remain owned by their callers.
+    ///
+    /// For an explicit socket, construct a [`WaylandConnection`] with
+    /// [`WaylandConnection::from_socket`] and a connected `std::os::unix::net::UnixStream`.
+    /// Neither `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` nor `XDG_RUNTIME_DIR` is consulted.
+    /// Main-thread requirements are unchanged. Failed initialization with an explicit
+    /// connection permits retry; successful creation still forbids another event loop,
+    /// even after it is dropped. A later backend-selection method can override Wayland.
+    fn with_wayland_connection(&mut self, connection: WaylandConnection) -> &mut Self;
 
     /// Whether to allow the event loop to be created off of the main thread.
     ///

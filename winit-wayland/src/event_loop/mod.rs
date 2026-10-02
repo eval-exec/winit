@@ -56,6 +56,17 @@ use super::{WindowId, logical_to_physical_rounded};
 
 type WaylandDispatcher = calloop::Dispatcher<'static, WaylandSource<WinitState>, WinitState>;
 
+static EVENT_LOOP_CREATED: AtomicBool = AtomicBool::new(false);
+
+/// Release an explicit-connection creation reservation unless initialization completes.
+struct CreationReservation;
+
+impl Drop for CreationReservation {
+    fn drop(&mut self) {
+        EVENT_LOOP_CREATED.store(false, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum Event {
     WindowEvent { window_id: WindowId, event: WindowEvent },
@@ -91,7 +102,6 @@ pub struct EventLoop {
 
 impl EventLoop {
     pub fn new() -> Result<EventLoop, EventLoopError> {
-        static EVENT_LOOP_CREATED: AtomicBool = AtomicBool::new(false);
         if EVENT_LOOP_CREATED.swap(true, Ordering::Relaxed) {
             // For better cross-platformness.
             return Err(EventLoopError::RecreationAttempt);
@@ -99,6 +109,26 @@ impl EventLoop {
 
         let connection = Connection::connect_to_env().map_err(|err| os_error!(err))?;
 
+        Self::from_connection(connection)
+    }
+
+    /// Create an event loop using an owned connection without consulting the environment.
+    ///
+    /// A fresh event queue is created on the supplied connection. Other queues remain
+    /// the caller's responsibility. Failed initialization releases the creation reservation
+    /// so another explicit connection can be tried. Successful creation permanently consumes
+    /// the one-event-loop allowance, including after the event loop is dropped.
+    pub fn new_with_connection(connection: Connection) -> Result<EventLoop, EventLoopError> {
+        if EVENT_LOOP_CREATED.swap(true, Ordering::Relaxed) {
+            return Err(EventLoopError::RecreationAttempt);
+        }
+        let reservation = CreationReservation;
+        let event_loop = Self::from_connection(connection)?;
+        mem::forget(reservation);
+        Ok(event_loop)
+    }
+
+    fn from_connection(connection: Connection) -> Result<EventLoop, EventLoopError> {
         let (globals, mut event_queue) =
             globals::registry_queue_init(&connection).map_err(|err| os_error!(err))?;
         let queue_handle = event_queue.handle();
