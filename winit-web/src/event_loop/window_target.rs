@@ -149,6 +149,7 @@ impl ActiveEventLoop {
                                 key_without_modifiers: logical_key,
                             },
                             is_synthetic: false,
+                            timestamp: None,
                         },
                     })
                     .chain(modifiers_changed),
@@ -184,6 +185,7 @@ impl ActiveEventLoop {
                                 key_without_modifiers: logical_key,
                             },
                             is_synthetic: false,
+                            timestamp: None,
                         },
                     })
                     .chain(modifiers_changed),
@@ -267,6 +269,7 @@ impl ActiveEventLoop {
                                     primary,
                                     position,
                                     source,
+                                    timestamp: None,
                                 },
                             }))
                         },
@@ -297,6 +300,7 @@ impl ActiveEventLoop {
                             position,
                             button,
                             is_macos_activation_click: false,
+                            timestamp: None,
                         },
                     }]));
                 }
@@ -325,6 +329,7 @@ impl ActiveEventLoop {
                         position,
                         button,
                         is_macos_activation_click: false,
+                        timestamp: None,
                     },
                 })));
             }
@@ -354,6 +359,7 @@ impl ActiveEventLoop {
                         position,
                         button,
                         is_macos_activation_click: false,
+                        timestamp: None,
                     },
                 })));
             }
@@ -378,6 +384,7 @@ impl ActiveEventLoop {
                         device_id: None,
                         delta,
                         phase: TouchPhase::Moved,
+                        timestamp: None,
                     },
                 },
             )));

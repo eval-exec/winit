@@ -23,8 +23,8 @@ use sctk::seat::pointer::{PointerData, PointerEvent, PointerEventKind, PointerHa
 
 use dpi::{LogicalPosition, PhysicalPosition};
 use winit_core::event::{
-    ButtonSource, ElementState, MouseButton, MouseScrollDelta, PointerKind, PointerSource,
-    TouchPhase, WindowEvent,
+    ButtonSource, ElementState, EventTimestamp, MouseButton, MouseScrollDelta, PointerKind,
+    PointerSource, TouchPhase, WindowEvent,
 };
 
 use crate::WindowId;
@@ -152,19 +152,20 @@ impl PointerHandler for WinitState {
                         window_id,
                     );
                 },
-                PointerEventKind::Motion { .. } => {
+                PointerEventKind::Motion { time, .. } => {
                     self.events_sink.push_window_event(
                         WindowEvent::PointerMoved {
                             primary: true,
                             device_id: None,
                             position,
                             source: PointerSource::Mouse,
+                            timestamp: Some(EventTimestamp::wayland(time)),
                         },
                         window_id,
                     );
                 },
-                ref kind @ PointerEventKind::Press { button, serial, .. }
-                | ref kind @ PointerEventKind::Release { button, serial, .. } => {
+                ref kind @ PointerEventKind::Press { button, serial, time }
+                | ref kind @ PointerEventKind::Release { button, serial, time } => {
                     // Update the last button serial.
 
                     pointer.winit_data().data().inner.lock().unwrap().latest_button_serial = serial;
@@ -188,11 +189,12 @@ impl PointerHandler for WinitState {
                             position,
                             button,
                             is_macos_activation_click: false,
+                            timestamp: Some(EventTimestamp::wayland(time)),
                         },
                         window_id,
                     );
                 },
-                PointerEventKind::Axis { horizontal, vertical, .. } => {
+                PointerEventKind::Axis { horizontal, vertical, time, .. } => {
                     // Get the current phase.
                     let mut pointer_data = pointer.winit_data().data().inner.lock().unwrap();
 
@@ -240,7 +242,12 @@ impl PointerHandler for WinitState {
                     };
 
                     self.events_sink.push_window_event(
-                        WindowEvent::MouseWheel { device_id: None, delta, phase },
+                        WindowEvent::MouseWheel {
+                            device_id: None,
+                            delta,
+                            phase,
+                            timestamp: Some(EventTimestamp::wayland(time)),
+                        },
                         window_id,
                     )
                 },

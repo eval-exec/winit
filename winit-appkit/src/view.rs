@@ -19,8 +19,8 @@ use objc2_foundation::{
 };
 use tracing::{debug_span, trace_span};
 use winit_core::event::{
-    DeviceEvent, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta,
-    PointerKind, PointerSource, TouchPhase, WindowEvent,
+    DeviceEvent, ElementState, EventTimestamp, Ime, KeyEvent, Modifiers, MouseButton,
+    MouseScrollDelta, PointerKind, PointerSource, TouchPhase, WindowEvent,
 };
 use winit_core::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey};
 use winit_core::window::ImeCapabilities;
@@ -511,6 +511,7 @@ define_class!(
                     device_id: None,
                     event: key_event,
                     is_synthetic: false,
+                    timestamp: EventTimestamp::mac_uptime(event.timestamp()),
                 });
             }
         }
@@ -528,6 +529,7 @@ define_class!(
                     device_id: None,
                     event: create_key_event(&event, false, false),
                     is_synthetic: false,
+                    timestamp: EventTimestamp::mac_uptime(event.timestamp()),
                 });
             }
         }
@@ -573,12 +575,14 @@ define_class!(
                 .expect("could not find current event");
 
             self.update_modifiers(&event, false);
+            let timestamp = EventTimestamp::mac_uptime(event.timestamp());
             let event = create_key_event(&event, true, event.isARepeat());
 
             self.queue_event(WindowEvent::KeyboardInput {
                 device_id: None,
                 event,
                 is_synthetic: false,
+                timestamp,
             });
         }
 
@@ -723,7 +727,12 @@ define_class!(
             self.ivars().app_state.maybe_queue_with_handler(move |app, event_loop| {
                 app.device_event(event_loop, None, DeviceEvent::MouseWheel { delta })
             });
-            self.queue_event(WindowEvent::MouseWheel { device_id: None, delta, phase });
+            self.queue_event(WindowEvent::MouseWheel {
+                device_id: None,
+                delta,
+                phase,
+                timestamp: EventTimestamp::mac_uptime(event.timestamp()),
+            });
         }
 
         #[unsafe(method(magnifyWithEvent:))]
@@ -1100,6 +1109,7 @@ impl WinitView {
                             device_id: None,
                             event,
                             is_synthetic: false,
+                            timestamp: EventTimestamp::mac_uptime(ns_event.timestamp()),
                         });
                     }
                     if phys_mod.contains(ModLocationMask::RIGHT) {
@@ -1109,6 +1119,7 @@ impl WinitView {
                             device_id: None,
                             event,
                             is_synthetic: false,
+                            timestamp: EventTimestamp::mac_uptime(ns_event.timestamp()),
                         });
                     }
                     *phys_mod = ModLocationMask::empty();
@@ -1140,6 +1151,7 @@ impl WinitView {
                         device_id: None,
                         event,
                         is_synthetic: false,
+                        timestamp: EventTimestamp::mac_uptime(ns_event.timestamp()),
                     });
                 }
 
@@ -1204,6 +1216,7 @@ impl WinitView {
             position,
             button: button.into(),
             is_macos_activation_click,
+            timestamp: EventTimestamp::mac_uptime(event.timestamp()),
         });
     }
 
@@ -1230,6 +1243,7 @@ impl WinitView {
             primary: true,
             position: view_point.to_physical(self.scale_factor()),
             source: PointerSource::Mouse,
+            timestamp: EventTimestamp::mac_uptime(event.timestamp()),
         });
     }
 

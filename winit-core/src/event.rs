@@ -18,6 +18,81 @@ use crate::keyboard::{self, ModifiersKeyState, ModifiersKeys, ModifiersState};
 use crate::window::Window;
 use crate::window::{ActivationToken, Theme};
 
+/// The time at which an input event occurred, in the window system's native clock.
+///
+/// The value is passed through unchanged from the platform: milliseconds in the
+/// clock named by [`Self::clock`]. It is deliberately not an `Instant`: the
+/// epoch and wrap behavior depend on the backend, and values from different
+/// clocks must not be subtracted from each other.
+///
+/// Input events carry `Option<EventTimestamp>` because some events are
+/// synthesized by winit or by an input method and have no native event time.
+/// That is different from a timestamp of zero: zero is a real value in clocks
+/// whose epoch is process or server start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EventTimestamp {
+    /// Milliseconds in the clock named by [`Self::clock`].
+    pub ms: u64,
+    /// The clock `ms` is measured in.
+    pub clock: EventClock,
+}
+
+/// The window system clock an [`EventTimestamp`] belongs to.
+///
+/// The variants mirror the clocks GNU Emacs reads for `input_event.timestamp`;
+/// on each platform this is the same clock that GNU exposes through
+/// `posn-timestamp`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EventClock {
+    /// X11 server time: milliseconds since the server started, 32-bit and
+    /// wrapping after roughly 49 days.
+    X11Server,
+    /// Wayland seat time: milliseconds, the low 32 bits of `CLOCK_MONOTONIC`,
+    /// wrapping after roughly 49 days.
+    WaylandSeat,
+    /// Windows message time: milliseconds since system start
+    /// (`GetMessageTime`), 32-bit and wrapping.
+    WindowsMessage,
+    /// macOS uptime: milliseconds since system boot
+    /// (`NSEvent.timestamp * 1000`).
+    MacUptime,
+}
+
+impl EventTimestamp {
+    /// Construct a timestamp from a native millisecond value.
+    pub const fn new(ms: u64, clock: EventClock) -> Self {
+        Self { ms, clock }
+    }
+
+    /// X11 server time in milliseconds.
+    pub const fn x11(ms: u32) -> Self {
+        Self::new(ms as u64, EventClock::X11Server)
+    }
+
+    /// Wayland seat time in milliseconds.
+    pub const fn wayland(ms: u32) -> Self {
+        Self::new(ms as u64, EventClock::WaylandSeat)
+    }
+
+    /// Windows message time in milliseconds.
+    pub const fn windows(ms: u32) -> Self {
+        Self::new(ms as u64, EventClock::WindowsMessage)
+    }
+
+    /// macOS uptime, from `NSEvent.timestamp` (seconds since system start).
+    ///
+    /// Returns `None` for values that cannot be represented (negative or
+    /// non-finite), which can only come from a synthesized event.
+    pub fn mac_uptime(seconds: f64) -> Option<Self> {
+        if seconds.is_finite() && seconds >= 0.0 {
+            Some(Self::new((seconds * 1000.0) as u64, EventClock::MacUptime))
+        } else {
+            None
+        }
+    }
+}
+
 /// Describes the reason the event loop is resuming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -205,6 +280,12 @@ pub enum WindowEvent {
         ///
         /// Otherwise, this value is always `false`.
         is_synthetic: bool,
+
+        /// Native time of the key event, if the backend reports one.
+        ///
+        /// Synthetic key events (for example the press events winit fabricates
+        /// when a window gains focus) carry `None`.
+        timestamp: Option<EventTimestamp>,
     },
 
     /// The keyboard modifiers have changed.
@@ -247,6 +328,9 @@ pub enum WindowEvent {
         primary: bool,
 
         source: PointerSource,
+
+        /// Native time of the pointer motion, if the backend reports one.
+        timestamp: Option<EventTimestamp>,
     },
 
     /// The pointer has entered the window.
@@ -305,7 +389,18 @@ pub enum WindowEvent {
     },
 
     /// A mouse wheel movement or touchpad scroll occurred.
-    MouseWheel { device_id: Option<DeviceId>, delta: MouseScrollDelta, phase: TouchPhase },
+    MouseWheel {
+        device_id: Option<DeviceId>,
+        delta: MouseScrollDelta,
+        phase: TouchPhase,
+
+        /// Native time of the scroll event, if the backend reports one.
+        ///
+        /// Winit may synthesize momentum or precision-touchpad scrolls from
+        /// several device reports; the timestamp then names the message or
+        /// event that produced the batch.
+        timestamp: Option<EventTimestamp>,
+    },
 
     /// An mouse button press has been received.
     PointerButton {
@@ -350,6 +445,13 @@ pub enum WindowEvent {
         ///
         /// [`acceptsFirstMouse:`]: https://developer.apple.com/documentation/appkit/nsview/acceptsfirstmouse(_:)
         is_macos_activation_click: bool,
+
+        /// Native time of the button event, if the backend reports one.
+        ///
+        /// A press and its release normally carry distinct native times; an
+        /// activation click synthesized by winit still reports the native time
+        /// of the event that triggered it.
+        timestamp: Option<EventTimestamp>,
     },
 
     /// Multi-finger hold gesture on the touchpad or touchscreen without movement.
@@ -524,6 +626,23 @@ pub enum WindowEvent {
     ///
     /// [the safe area]: crate::window::Window::safe_area
     RedrawRequested,
+}
+
+impl WindowEvent {
+    /// The native timestamp carried by this event, if any.
+    ///
+    /// Only device input events carry a timestamp today; lifecycle, IME, and
+    /// gesture events return `None`. A `None` here means the backend did not
+    /// report a native event time, not that the time was zero.
+    pub fn timestamp(&self) -> Option<EventTimestamp> {
+        match self {
+            Self::KeyboardInput { timestamp, .. }
+            | Self::PointerMoved { timestamp, .. }
+            | Self::PointerButton { timestamp, .. }
+            | Self::MouseWheel { timestamp, .. } => *timestamp,
+            _ => None,
+        }
+    }
 }
 
 /// Represents the kind type of a pointer event.
@@ -1702,6 +1821,7 @@ mod tests {
                 primary: true,
                 position: (0, 0).into(),
                 source: PointerSource::Mouse,
+                timestamp: None,
             });
             with_window_event(ModifiersChanged(event::Modifiers::default()));
             with_window_event(PointerEntered {
@@ -1720,6 +1840,7 @@ mod tests {
                 device_id: None,
                 delta: event::MouseScrollDelta::LineDelta(0.0, 0.0),
                 phase: event::TouchPhase::Started,
+                timestamp: None,
             });
             with_window_event(PointerButton {
                 device_id: None,
@@ -1728,6 +1849,7 @@ mod tests {
                 position: (0, 0).into(),
                 button: event::ButtonSource::Unknown(0),
                 is_macos_activation_click: false,
+                timestamp: None,
             });
             with_window_event(PointerButton {
                 device_id: None,
@@ -1739,6 +1861,7 @@ mod tests {
                     force: Some(event::Force::Normalized(0.0)),
                 },
                 is_macos_activation_click: false,
+                timestamp: None,
             });
             with_window_event(PinchGesture {
                 device_id: None,
@@ -1779,6 +1902,46 @@ mod tests {
             let event2 = event.clone();
             assert_eq!(event, event2);
         });
+    }
+
+    #[test]
+    fn event_timestamp_conversions() {
+        assert_eq!(
+            event::EventTimestamp::x11(1_234),
+            event::EventTimestamp::new(1_234, event::EventClock::X11Server)
+        );
+        assert_eq!(
+            event::EventTimestamp::wayland(1_234),
+            event::EventTimestamp::new(1_234, event::EventClock::WaylandSeat)
+        );
+        assert_eq!(
+            event::EventTimestamp::windows(0xffff_ffff),
+            event::EventTimestamp::new(u32::MAX as u64, event::EventClock::WindowsMessage)
+        );
+
+        // GNU converts NSEvent.timestamp with `[e timestamp] * 1000`, i.e.
+        // seconds to milliseconds by truncation.
+        let mac = event::EventTimestamp::mac_uptime(1.2349).unwrap();
+        assert_eq!(mac.ms, 1_234);
+        assert_eq!(mac.clock, event::EventClock::MacUptime);
+        assert!(event::EventTimestamp::mac_uptime(f64::NAN).is_none());
+        assert!(event::EventTimestamp::mac_uptime(-1.0).is_none());
+    }
+
+    #[test]
+    fn window_event_reports_its_timestamp() {
+        let timestamp = event::EventTimestamp::x11(42);
+        let event = event::WindowEvent::PointerButton {
+            device_id: None,
+            primary: true,
+            state: event::ElementState::Pressed,
+            position: (0.0, 0.0).into(),
+            button: event::ButtonSource::Unknown(0),
+            is_macos_activation_click: false,
+            timestamp: Some(timestamp),
+        };
+        assert_eq!(event.timestamp(), Some(timestamp));
+        assert_eq!(event::WindowEvent::RedrawRequested.timestamp(), None);
     }
 
     #[test]

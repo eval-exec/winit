@@ -12,7 +12,7 @@ use sctk::reexports::client::protocol::wl_seat::WlSeat;
 use sctk::reexports::client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use tracing::warn;
 use winit_common::xkb::Context;
-use winit_core::event::{ElementState, WindowEvent};
+use winit_core::event::{ElementState, EventTimestamp, WindowEvent};
 use winit_core::keyboard::ModifiersState;
 
 use crate::WindowId;
@@ -129,7 +129,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     state.events_sink.push_window_event(WindowEvent::Focused(false), window_id);
                 }
             },
-            WlKeyboardEvent::Key { serial, key, state: WEnum::Value(key_state), .. }
+            WlKeyboardEvent::Key { serial, time, key, state: WEnum::Value(key_state), .. }
                 if matches!(key_state, WlKeyState::Repeated | WlKeyState::Pressed) =>
             {
                 seat_state.latest_input_serial.set(Some(serial));
@@ -141,6 +141,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     key,
                     ElementState::Pressed,
                     key_state == WlKeyState::Repeated,
+                    Some(EventTimestamp::wayland(time)),
                 );
 
                 let delay = match keyboard_state.repeat_info {
@@ -195,6 +196,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                             repeat_keycode,
                             ElementState::Pressed,
                             true,
+                            None,
                         );
 
                         // NOTE: the gap could change dynamically while repeat is going.
@@ -206,7 +208,11 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     .ok();
             },
             WlKeyboardEvent::Key {
-                serial, key, state: WEnum::Value(WlKeyState::Released), ..
+                serial,
+                time,
+                key,
+                state: WEnum::Value(WlKeyState::Released),
+                ..
             } => {
                 seat_state.latest_input_serial.set(Some(serial));
                 let key = key + 8;
@@ -218,6 +224,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     key,
                     ElementState::Released,
                     false,
+                    Some(EventTimestamp::wayland(time)),
                 );
 
                 if keyboard_state.repeat_info != RepeatInfo::Disable
@@ -370,6 +377,7 @@ fn key_input(
     keycode: u32,
     state: ElementState,
     repeat: bool,
+    timestamp: Option<EventTimestamp>,
 ) {
     let window_id = match *data.window_id.lock().unwrap() {
         Some(window_id) => window_id,
@@ -378,7 +386,8 @@ fn key_input(
 
     if let Some(mut key_context) = keyboard_state.xkb_context.key_context() {
         let event = key_context.process_key_event(keycode, state, repeat);
-        let event = WindowEvent::KeyboardInput { device_id: None, event, is_synthetic: false };
+        let event =
+            WindowEvent::KeyboardInput { device_id: None, event, is_synthetic: false, timestamp };
         event_sink.push_window_event(event, window_id);
     }
 }

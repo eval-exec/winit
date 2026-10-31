@@ -218,6 +218,8 @@ impl Dispatch2<ZwpTabletToolV2, WinitState> for TabletToolData {
                                 kind,
                                 data: data.tool_state.clone(),
                             },
+                            // Tablet tool events carry no protocol timestamp.
+                            timestamp: None,
                         },
                         TabletEvent::Button { button, state, serial } => {
                             // Update serial if we have it.
@@ -236,6 +238,8 @@ impl Dispatch2<ZwpTabletToolV2, WinitState> for TabletToolData {
                                     data: data.tool_state.clone(),
                                 },
                                 is_macos_activation_click: false,
+                                // Tablet tool events carry no protocol timestamp.
+                                timestamp: None,
                             }
                         },
                         TabletEvent::Left => WindowEvent::PointerLeft {

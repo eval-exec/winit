@@ -572,6 +572,7 @@ impl WinitView {
                                 ButtonSource::Touch { finger_id, force }
                             },
                             is_macos_activation_click: false,
+                            timestamp: None,
                         },
                     });
                 },
@@ -596,6 +597,7 @@ impl WinitView {
                             primary,
                             position,
                             source,
+                            timestamp: None,
                         },
                     });
                 },
@@ -631,6 +633,7 @@ impl WinitView {
                                     ButtonSource::Touch { finger_id, force }
                                 },
                                 is_macos_activation_click: false,
+                                timestamp: None,
                             },
                         });
                     }
@@ -715,6 +718,7 @@ impl WinitView {
                             key_without_modifiers: Key::Character(text.clone()),
                         },
                         is_synthetic: false,
+                        timestamp: None,
                     },
                 })
             }),
@@ -742,6 +746,7 @@ impl WinitView {
                         key_without_modifiers: Key::Named(NamedKey::Backspace),
                     },
                     is_synthetic: false,
+                    timestamp: None,
                 },
             }),
         );

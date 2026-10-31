@@ -422,6 +422,7 @@ impl EventLoop {
                         text_with_all_modifiers,
                     },
                     is_synthetic: false,
+                    timestamp: None,
                 };
 
                 app.window_event(window_target, window_id, event);
@@ -445,6 +446,7 @@ impl EventLoop {
                     primary: true,
                     position: event_state.mouse_pos.into(),
                     source: event::PointerSource::Mouse,
+                    timestamp: None,
                 });
             },
             EventOption::MouseRelative(MouseRelativeEvent { dx, dy }) => {
@@ -461,6 +463,7 @@ impl EventLoop {
                         position: event_state.mouse_pos.into(),
                         button: button.into(),
                         is_macos_activation_click: false,
+                        timestamp: None,
                     });
                 }
             },
@@ -469,6 +472,7 @@ impl EventLoop {
                     device_id: None,
                     delta: event::MouseScrollDelta::LineDelta(x as f32, y as f32),
                     phase: event::TouchPhase::Moved,
+                    timestamp: None,
                 });
             },
             EventOption::Quit(QuitEvent {}) => {

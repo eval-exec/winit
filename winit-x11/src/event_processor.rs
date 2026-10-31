@@ -9,7 +9,7 @@ use tracing::warn;
 use winit_common::xkb::{self, Context, XkbState};
 use winit_core::application::ApplicationHandler;
 use winit_core::event::{
-    ButtonSource, DeviceEvent, DeviceId, ElementState, FingerId, Ime, MouseButton,
+    ButtonSource, DeviceEvent, DeviceId, ElementState, EventTimestamp, FingerId, Ime, MouseButton,
     MouseScrollDelta, PointerKind, PointerSource, RawKeyEvent, SurfaceSizeWriter, TouchPhase,
     WindowEvent,
 };
@@ -993,8 +993,12 @@ impl EventProcessor {
 
             if let Some(mut key_processor) = self.xkb_context.key_context() {
                 let event = key_processor.process_key_event(keycode, state, repeat);
-                let event =
-                    WindowEvent::KeyboardInput { device_id: None, event, is_synthetic: false };
+                let event = WindowEvent::KeyboardInput {
+                    device_id: None,
+                    event,
+                    is_synthetic: false,
+                    timestamp: Some(EventTimestamp::x11(xev.time as u32)),
+                };
                 app.window_event(&self.target, window_id, event);
             }
 
@@ -1076,6 +1080,7 @@ impl EventProcessor {
         }
 
         let position = PhysicalPosition::new(event.event_x, event.event_y);
+        let timestamp = Some(EventTimestamp::x11(event.time as u32));
 
         let event = match event.detail as u32 {
             xlib::Button1 => WindowEvent::PointerButton {
@@ -1085,6 +1090,7 @@ impl EventProcessor {
                 position,
                 button: MouseButton::Left.into(),
                 is_macos_activation_click: false,
+                timestamp,
             },
             xlib::Button2 => WindowEvent::PointerButton {
                 device_id,
@@ -1093,6 +1099,7 @@ impl EventProcessor {
                 position,
                 button: MouseButton::Middle.into(),
                 is_macos_activation_click: false,
+                timestamp,
             },
             xlib::Button3 => WindowEvent::PointerButton {
                 device_id,
@@ -1101,6 +1108,7 @@ impl EventProcessor {
                 position,
                 button: MouseButton::Right.into(),
                 is_macos_activation_click: false,
+                timestamp,
             },
 
             // Suppress emulated scroll wheel clicks, since we handle the real motion events for
@@ -1118,6 +1126,7 @@ impl EventProcessor {
                         _ => unreachable!(),
                     },
                     phase: TouchPhase::Moved,
+                    timestamp,
                 },
                 ElementState::Released => return,
             },
@@ -1131,6 +1140,7 @@ impl EventProcessor {
                 // 255 is the largest code yielded on X11 (tested).
                 button: MouseButton::try_from_u8((x - 5) as u8).unwrap().into(),
                 is_macos_activation_click: false,
+                timestamp,
             },
             x @ 37..=0xff => WindowEvent::PointerButton {
                 device_id,
@@ -1140,6 +1150,7 @@ impl EventProcessor {
                 // 255 is the largest code yielded on X11 (tested).
                 button: ButtonSource::Unknown(x as u16),
                 is_macos_activation_click: false,
+                timestamp,
             },
             _ => return,
         };
@@ -1178,6 +1189,7 @@ impl EventProcessor {
                 primary: true,
                 position,
                 source: PointerSource::Mouse,
+                timestamp: Some(EventTimestamp::x11(event.time as u32)),
             };
             app.window_event(&self.target, window_id, event);
         } else if cursor_moved.is_none() {
@@ -1214,7 +1226,12 @@ impl EventProcessor {
                 // Keep the physical source: the master pointer is shared by
                 // independent mice/touchpads with different scroll streams.
                 let device_id = Some(mkdid(event.sourceid as xinput::DeviceId));
-                let event = WindowEvent::MouseWheel { device_id, delta, phase: TouchPhase::Moved };
+                let event = WindowEvent::MouseWheel {
+                    device_id,
+                    delta,
+                    phase: TouchPhase::Moved,
+                    timestamp: Some(EventTimestamp::x11(event.time as u32)),
+                };
                 events.push(event);
             }
 
@@ -1336,6 +1353,7 @@ impl EventProcessor {
             primary: true,
             position,
             source: PointerSource::Mouse,
+            timestamp: Some(EventTimestamp::x11(xev.time as u32)),
         };
         app.window_event(&self.target, window_id, event);
     }
@@ -1407,6 +1425,7 @@ impl EventProcessor {
                     primary: true,
                     position: position.cast(),
                     source: PointerSource::Mouse,
+                    timestamp: Some(EventTimestamp::x11(xev.time as u32)),
                 };
                 app.window_event(&self.target, window_id, event);
             }
@@ -1430,6 +1449,7 @@ impl EventProcessor {
                         position,
                         button: ButtonSource::Touch { finger_id, force: None },
                         is_macos_activation_click: false,
+                        timestamp: Some(EventTimestamp::x11(xev.time as u32)),
                     };
                     app.window_event(&self.target, window_id, event);
                 },
@@ -1439,6 +1459,7 @@ impl EventProcessor {
                         primary: is_first_touch,
                         position,
                         source: PointerSource::Touch { finger_id, force: None },
+                        timestamp: Some(EventTimestamp::x11(xev.time as u32)),
                     };
                     app.window_event(&self.target, window_id, event);
                 },
@@ -1450,6 +1471,7 @@ impl EventProcessor {
                         position,
                         button: ButtonSource::Touch { finger_id, force: None },
                         is_macos_activation_click: false,
+                        timestamp: Some(EventTimestamp::x11(xev.time as u32)),
                     };
                     app.window_event(&self.target, window_id, event);
                     let event = WindowEvent::PointerLeft {
@@ -1820,7 +1842,12 @@ impl EventProcessor {
 
         for keycode in target.xconn.query_keymap().into_iter().filter(|k| *k >= KEYCODE_OFFSET) {
             let event = key_processor.process_key_event(keycode as u32, state, false);
-            let event = WindowEvent::KeyboardInput { device_id: None, event, is_synthetic: true };
+            let event = WindowEvent::KeyboardInput {
+                device_id: None,
+                event,
+                is_synthetic: true,
+                timestamp: None,
+            };
             app.window_event(target, window_id, event);
         }
     }

@@ -6,6 +6,44 @@ pins an exact commit from this branch. Topic branches are not separate release
 channels. The local `origin` remote is upstream `rust-windowing/winit`; `fork`
 is `eval-exec/winit`.
 
+## Native input timestamps
+
+The device input events (`KeyboardInput`, `PointerMoved`, `PointerButton`,
+`MouseWheel`) now carry `timestamp: Option<EventTimestamp>`, and
+`WindowEvent::timestamp()` returns it. `EventTimestamp { ms, clock }` is the
+window system's value passed through unchanged, in milliseconds:
+
+| Backend | `EventClock` | Source |
+|---|---|---|
+| X11 | `X11Server` | core `xev.time` / XI2 `XIDeviceEvent.time` (server ms) |
+| Wayland | `WaylandSeat` | SCTK pointer/keyboard/touch `time` (`wl_pointer.time`, `wl_keyboard.key`, `wl_touch`) |
+| Windows | `WindowsMessage` | `GetMessageTime()` (`MSG.time`) |
+| macOS | `MacUptime` | `NSEvent.timestamp * 1000`, exactly GNU's `EV_TIMESTAMP` |
+
+`None` means the backend has no native time for the event: winit-synthesized
+events (focus key synthesis, X11 pressed-key replay, Wayland key-repeat
+timers), IME events, the Wayland tablet protocol, and the
+Android/iOS/web/orbital backends. Zero is a real timestamp in server-relative
+clocks, so consumers must treat `None`, not zero, as "unknown".
+
+Neomacs consumes these values for GNU's event-time semantics (double-click and
+drag classification, Lisp `posn-timestamp`).
+
+Verification:
+
+```sh
+cargo nextest run -p winit-core
+cargo check -p winit --tests --target x86_64-unknown-linux-gnu
+cargo check -p winit-x11 -p winit-wayland --target x86_64-unknown-linux-gnu
+cargo check -p winit-win32 --target x86_64-pc-windows-msvc
+cargo check -p winit-uikit --target aarch64-apple-ios
+cargo check -p winit-web --target wasm32-unknown-unknown
+cargo check -p winit-orbital --target x86_64-unknown-linux-gnu
+```
+
+Android needs an NDK toolchain (`--features game-activity`), so it is checked
+only on the Android builder.
+
 ## Wayland popup lifetime
 
 Base: upstream `a98b2b217c901f8776a2bdb4ebc35ea7611998ce`.

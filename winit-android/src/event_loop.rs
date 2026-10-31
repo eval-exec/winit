@@ -413,6 +413,7 @@ impl EventLoop {
                                     key_without_modifiers: winit_core::keyboard::Key::Named(named),
                                 },
                                 is_synthetic: true,
+                                timestamp: None,
                             },
                         );
                     }
@@ -494,6 +495,7 @@ impl EventLoop {
                                     _ => event::ButtonSource::Unknown(0),
                                 },
                                 is_macos_activation_click: false,
+                                timestamp: None,
                             };
                             app.window_event(&self.window_target, GLOBAL_WINDOW, event);
                         },
@@ -511,6 +513,7 @@ impl EventLoop {
                                     android_activity::input::ToolType::Mouse => continue,
                                     _ => event::PointerSource::Unknown,
                                 },
+                                timestamp: None,
                             };
                             app.window_event(&self.window_target, GLOBAL_WINDOW, event);
                         },
@@ -538,6 +541,7 @@ impl EventLoop {
                                         _ => event::ButtonSource::Unknown(0),
                                     },
                                     is_macos_activation_click: false,
+                                    timestamp: None,
                                 };
                                 app.window_event(&self.window_target, GLOBAL_WINDOW, event);
                             }
@@ -626,6 +630,7 @@ impl EventLoop {
                                 key_without_modifiers: keycodes::to_logical(key_char, keycode),
                             },
                             is_synthetic: false,
+                            timestamp: None,
                         };
 
                         app.window_event(&self.window_target, GLOBAL_WINDOW, event);

@@ -42,15 +42,15 @@ use windows_sys::Win32::UI::Input::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     EnumThreadWindows, GW_OWNER, GWL_STYLE, GWL_USERDATA, GetClientRect, GetCursorPos, GetMenu,
-    GetWindow, HTCAPTION, HTCLIENT, LoadCursorW, MINMAXINFO, MNC_CLOSE, MSG, MWMO_INPUTAVAILABLE,
-    MsgWaitForMultipleObjectsEx, NCCALCSIZE_PARAMS, PEN_FLAG_BARREL, PEN_FLAG_ERASER,
-    PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, PM_REMOVE, PT_PEN,
-    PT_TOUCH, PeekMessageW, PostMessageW, QS_ALLINPUT, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL,
-    RegisterClassExW, RegisterWindowMessageA, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
-    SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SetCursor, SetWindowPos, SystemParametersInfoW, TranslateMessage, WHEEL_DELTA,
-    WINDOWPOS, WM_CAPTURECHANGED, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ENTERSIZEMOVE,
-    WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
+    GetMessageTime, GetWindow, HTCAPTION, HTCLIENT, LoadCursorW, MINMAXINFO, MNC_CLOSE, MSG,
+    MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, NCCALCSIZE_PARAMS, PEN_FLAG_BARREL,
+    PEN_FLAG_ERASER, PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X, PEN_MASK_TILT_Y,
+    PM_REMOVE, PT_PEN, PT_TOUCH, PeekMessageW, PostMessageW, QS_ALLINPUT, RI_MOUSE_HWHEEL,
+    RI_MOUSE_WHEEL, RegisterClassExW, RegisterWindowMessageA, SC_MINIMIZE, SC_RESTORE,
+    SIZE_MAXIMIZED, SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowPos, SystemParametersInfoW, TranslateMessage,
+    WHEEL_DELTA, WINDOWPOS, WM_CAPTURECHANGED, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
+    WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
     WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUT, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
     WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MENUCHAR,
     WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE,
@@ -69,8 +69,8 @@ use winit_core::data_transfer::{
 };
 use winit_core::error::{EventLoopError, NotSupportedError, RequestError};
 use winit_core::event::{
-    DeviceEvent, DeviceId, FingerId, Force, Ime, RawKeyEvent, SurfaceSizeWriter, TabletToolButton,
-    TabletToolData, TabletToolKind, TabletToolTilt, TouchPhase, WindowEvent,
+    DeviceEvent, DeviceId, EventTimestamp, FingerId, Force, Ime, RawKeyEvent, SurfaceSizeWriter,
+    TabletToolButton, TabletToolData, TabletToolKind, TabletToolTilt, TouchPhase, WindowEvent,
 };
 use winit_core::event_loop::pump_events::PumpStatus;
 use winit_core::event_loop::{
@@ -117,6 +117,16 @@ pub(crate) struct WindowData {
     pub recurse_depth: Cell<u32>,
 }
 
+/// Time of the message currently being dispatched on this thread, in
+/// milliseconds since system start.
+///
+/// `GetMessageTime` is the same value GNU reads from `MSG.time`, and it is
+/// valid inside the window procedure for the message being dispatched.
+fn message_timestamp() -> Option<EventTimestamp> {
+    // SAFETY: `GetMessageTime` takes no arguments and has no preconditions.
+    Some(EventTimestamp::windows(unsafe { GetMessageTime() } as u32))
+}
+
 impl WindowData {
     fn send_window_event(&self, window: HWND, event: WindowEvent) {
         let window_id = WindowId::from_raw(window as usize);
@@ -135,17 +145,15 @@ impl WindowData {
             if self.userdata_removed.get() {
                 return false;
             }
-            self.send_window_event(
-                window,
-                WindowEvent::MouseWheel {
-                    device_id: None,
-                    delta: winit_core::event::MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-                        packet.delta[0],
-                        packet.delta[1],
-                    )),
-                    phase: packet.phase,
-                },
-            );
+            self.send_window_event(window, WindowEvent::MouseWheel {
+                device_id: None,
+                delta: winit_core::event::MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                    packet.delta[0],
+                    packet.delta[1],
+                )),
+                phase: packet.phase,
+                timestamp: message_timestamp(),
+            });
         }
         !self.userdata_removed.get() && bridge.needs_update()
     }
@@ -420,8 +428,8 @@ impl EventLoop {
                 break;
             }
         }
-        self.next_touchpad_update = poll_precision_touchpad_windows()
-            .then(|| Instant::now() + Duration::from_millis(8));
+        self.next_touchpad_update =
+            poll_precision_touchpad_windows().then(|| Instant::now() + Duration::from_millis(8));
         if let Err(payload) = self.runner.take_panic_error() {
             self.runner.reset_runner();
             panic::resume_unwind(payload);
@@ -1317,6 +1325,7 @@ unsafe fn public_window_callback_inner(
                 device_id: None,
                 event: event.event,
                 is_synthetic: event.is_synthetic,
+                timestamp: if event.is_synthetic { None } else { message_timestamp() },
             });
         }
     };
@@ -1906,6 +1915,7 @@ unsafe fn public_window_callback_inner(
                     primary: true,
                     position,
                     source: PointerSource::Mouse,
+                    timestamp: message_timestamp(),
                 });
             }
 
@@ -1962,6 +1972,7 @@ unsafe fn public_window_callback_inner(
                 device_id: None,
                 delta: LineDelta(0.0, value * scroll_lines_multiplier as f32),
                 phase: TouchPhase::Moved,
+                timestamp: message_timestamp(),
             });
 
             result = ProcResult::Value(0);
@@ -1995,6 +2006,7 @@ unsafe fn public_window_callback_inner(
                 device_id: None,
                 delta: LineDelta(value * scroll_characters_multiplier as f32, 0.0),
                 phase: TouchPhase::Moved,
+                timestamp: message_timestamp(),
             });
 
             result = ProcResult::Value(0);
@@ -2040,6 +2052,7 @@ unsafe fn public_window_callback_inner(
                 }
                 .into(),
                 is_macos_activation_click: false,
+                timestamp: message_timestamp(),
             });
             result = ProcResult::Value(0);
         },
@@ -2070,6 +2083,7 @@ unsafe fn public_window_callback_inner(
                 }
                 .into(),
                 is_macos_activation_click: false,
+                timestamp: message_timestamp(),
             });
             result = ProcResult::Value(0);
         },
@@ -2099,6 +2113,7 @@ unsafe fn public_window_callback_inner(
                 // 1 is defined as back, 2 as forward; other codes are unexpected.
                 button: MouseButton::try_from_u8(b).unwrap().into(),
                 is_macos_activation_click: false,
+                timestamp: message_timestamp(),
             });
             result = ProcResult::Value(0);
         },
@@ -2129,6 +2144,7 @@ unsafe fn public_window_callback_inner(
                 // 1 is defined as back, 2 as forward; other codes are unexpected.
                 button: MouseButton::try_from_u8(b).unwrap().into(),
                 is_macos_activation_click: false,
+                timestamp: message_timestamp(),
             });
             result = ProcResult::Value(0);
         },
@@ -2189,6 +2205,7 @@ unsafe fn public_window_callback_inner(
                             position,
                             button: Touch { finger_id, force: None },
                             is_macos_activation_click: false,
+                            timestamp: message_timestamp(),
                         });
                     } else if util::has_flag(input.dwFlags, TOUCHEVENTF_UP) {
                         userdata.send_window_event(window, WindowEvent::PointerButton {
@@ -2198,6 +2215,7 @@ unsafe fn public_window_callback_inner(
                             position,
                             button: Touch { finger_id, force: None },
                             is_macos_activation_click: false,
+                            timestamp: message_timestamp(),
                         });
                         userdata.send_window_event(window, WindowEvent::PointerLeft {
                             device_id: None,
@@ -2211,6 +2229,7 @@ unsafe fn public_window_callback_inner(
                             primary,
                             position,
                             source: PointerSource::Touch { finger_id, force: None },
+                            timestamp: message_timestamp(),
                         });
                     } else {
                         continue;
@@ -2360,6 +2379,7 @@ unsafe fn public_window_callback_inner(
                                 position,
                                 button,
                                 is_macos_activation_click: false,
+                                timestamp: message_timestamp(),
                             });
                         } else {
                             userdata.send_window_event(window, WindowEvent::PointerButton {
@@ -2369,6 +2389,7 @@ unsafe fn public_window_callback_inner(
                                 position,
                                 button,
                                 is_macos_activation_click: false,
+                                timestamp: message_timestamp(),
                             });
                             userdata.send_window_event(window, WindowEvent::PointerLeft {
                                 device_id: None,
@@ -2395,6 +2416,7 @@ unsafe fn public_window_callback_inner(
                             primary,
                             position,
                             source,
+                            timestamp: message_timestamp(),
                         });
                     } else {
                         continue;
