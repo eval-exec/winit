@@ -18,7 +18,11 @@ use x11rb::xcb_ffi::XCBConnection;
 use super::atoms::Atoms;
 use super::ffi;
 use super::monitor::MonitorHandle;
+use crate::connection_loss::{
+    ConnectionLossState, NativeLossPolicy, X11ConnectionLossRegistrationError,
+};
 use crate::event_loop::X11Error;
+use crate::guarded_connection::{GuardedXcbConnection, NativeHealth};
 
 /// A connection to an X server.
 pub struct XConnection {
@@ -33,7 +37,9 @@ pub struct XConnection {
     /// The manager for the XCB connection.
     ///
     /// The `Option` ensures that we can drop it before we close the `Display`.
-    xcb: Option<XCBConnection>,
+    xcb: Option<GuardedXcbConnection>,
+
+    connection_loss: Arc<ConnectionLossState>,
 
     /// The atoms used by `winit`.
     ///
@@ -89,6 +95,11 @@ impl XConnection {
         unsafe { (xlib.XInitThreads)() };
         unsafe { (xlib.XSetErrorHandler)(error_handler) };
 
+        // Install the native-only process policy before opening a display.
+        // The per-display userdata binding below is initially unarmed; the
+        // application attaches its owner only after normal GUI readiness.
+        let native_loss_policy = NativeLossPolicy::prepare(&xlib);
+
         // calling XOpenDisplay
         let display = unsafe {
             let display = (xlib.XOpenDisplay)(ptr::null());
@@ -97,6 +108,14 @@ impl XConnection {
             }
             display
         };
+
+        let connection_loss = Arc::new(ConnectionLossState::new(display));
+        if let Err(error) = connection_loss.bind_native(&native_loss_policy) {
+            // No userdata policy was installed when registration refused.
+            // Close this still-unowned display before returning the refusal.
+            unsafe { (xlib.XCloseDisplay)(display) };
+            return Err(XNotSupported::ConnectionLossPolicyUnavailable(error));
+        }
 
         // Open the x11rb XCB connection.
         let xcb = {
@@ -109,7 +128,9 @@ impl XConnection {
             let conn =
                 unsafe { XCBConnection::from_raw_xcb_connection(xcb_connection.cast(), false) };
 
-            conn.map_err(|e| XNotSupported::XcbConversionError(Arc::new(WrapConnectError(e))))?
+            let conn =
+                conn.map_err(|e| XNotSupported::XcbConversionError(Arc::new(WrapConnectError(e))))?;
+            GuardedXcbConnection::new(conn, connection_loss.clone())
         };
 
         // Get the default screen.
@@ -167,6 +188,7 @@ impl XConnection {
             xinput2,
             display,
             xcb: Some(xcb),
+            connection_loss,
             atoms: Box::new(atoms),
             default_screen,
             timestamp: AtomicU32::new(0),
@@ -180,7 +202,10 @@ impl XConnection {
         })
     }
 
-    fn new_xsettings_screen(xcb: &XCBConnection, default_screen: usize) -> Option<xproto::Atom> {
+    fn new_xsettings_screen(
+        xcb: &GuardedXcbConnection,
+        default_screen: usize,
+    ) -> Option<xproto::Atom> {
         // Fetch the _XSETTINGS_S[screen number] atom.
         let xsettings_screen = xcb
             .intern_atom(false, format!("_XSETTINGS_S{default_screen}").as_bytes())
@@ -220,8 +245,29 @@ impl XConnection {
 
     /// Get the underlying XCB connection.
     #[inline]
-    pub fn xcb_connection(&self) -> &XCBConnection {
+    pub fn xcb_connection(&self) -> &GuardedXcbConnection {
         self.xcb.as_ref().expect("xcb_connection somehow called after drop?")
+    }
+
+    pub(crate) fn connection_loss_state(&self) -> &Arc<ConnectionLossState> {
+        &self.connection_loss
+    }
+
+    pub(crate) fn connection_loss_is_healthy(&self) -> bool {
+        self.xcb_connection().native_error().is_none()
+    }
+
+    /// All direct Xlib request families reject a previously lost epoch before
+    /// entering the foreign library. The I/O trampoline handles a first loss
+    /// discovered inside the call itself.
+    pub(crate) fn xlib(&self) -> &ffi::Xlib {
+        self.connection_loss.preflight_xlib();
+        &self.xlib
+    }
+
+    pub(crate) fn xinput2(&self) -> &ffi::XInput2 {
+        self.connection_loss.preflight_xlib();
+        &self.xinput2
     }
 
     /// Get the list of atoms.
@@ -330,7 +376,9 @@ impl fmt::Debug for XConnection {
 impl Drop for XConnection {
     #[inline]
     fn drop(&mut self) {
+        self.connection_loss.preflight_xlib();
         self.xcb = None;
+        self.connection_loss.retire_native_binding();
         unsafe { (self.xlib.XCloseDisplay)(self.display) };
     }
 }
@@ -368,6 +416,9 @@ pub enum XNotSupported {
     /// We encountered an error while converting the connection to XCB.
     XcbConversionError(Arc<dyn Error + Send + Sync + 'static>),
 
+    /// Native connection-loss registration refused before activation.
+    ConnectionLossPolicyUnavailable(X11ConnectionLossRegistrationError),
+
     /// A required X11 extension is not supported.
     ExtensionNotSupported(&'static str),
 }
@@ -385,6 +436,9 @@ impl XNotSupported {
             XNotSupported::LibraryOpenError(_) => "Failed to load one of xlib's shared libraries",
             XNotSupported::XOpenDisplayFailed => "Failed to open connection to X server",
             XNotSupported::XcbConversionError(_) => "Failed to convert Xlib connection to XCB",
+            XNotSupported::ConnectionLossPolicyUnavailable(_) => {
+                "Failed to register the native X11 connection-loss policy"
+            },
             XNotSupported::ExtensionNotSupported(reason) => reason,
         }
     }
@@ -396,6 +450,7 @@ impl Error for XNotSupported {
         match *self {
             XNotSupported::LibraryOpenError(ref err) => Some(err),
             XNotSupported::XcbConversionError(ref err) => Some(&**err),
+            XNotSupported::ConnectionLossPolicyUnavailable(ref err) => Some(err),
             _ => None,
         }
     }

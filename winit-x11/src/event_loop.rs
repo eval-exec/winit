@@ -55,7 +55,7 @@ pub(crate) const ALL_MASTER_DEVICES: u16 = 1;
 pub(crate) const ICONIC_STATE: u32 = 3;
 
 /// The underlying x11rb connection that we are using.
-type X11rbConnection = x11rb::xcb_ffi::XCBConnection;
+type X11rbConnection = crate::guarded_connection::GuardedXcbConnection;
 
 pub(crate) static X11_BACKEND: LazyLock<Mutex<Result<Arc<XConnection>, XNotSupported>>> =
     LazyLock::new(|| Mutex::new(XConnection::new(Some(x_error_callback)).map(Arc::new)));
@@ -79,7 +79,7 @@ unsafe extern "C" fn x_error_callback(
         // which do not require initialization.
         let mut buf: [MaybeUninit<c_char>; 1024] = unsafe { MaybeUninit::uninit().assume_init() };
         unsafe {
-            (xconn.xlib.XGetErrorText)(
+            (xconn.xlib().XGetErrorText)(
                 display,
                 (*event).error_code as c_int,
                 buf.as_mut_ptr() as *mut c_char,
@@ -246,7 +246,7 @@ impl EventLoop {
             // Check if set locale is supported by Xlib.
             // If not, calls to some Xlib functions like `XSetLocaleModifiers`
             // will fail.
-            let locale_supported = (xconn.xlib.XSupportsLocale)() == 1;
+            let locale_supported = (xconn.xlib().XSupportsLocale)() == 1;
             if !locale_supported {
                 let unsupported_locale = setlocale(LC_CTYPE, ptr::null());
                 warn!(
@@ -335,7 +335,9 @@ impl EventLoop {
             .expect("Failed to register the event loop waker source");
         let event_loop_proxy = EventLoopProxy::new(user_waker);
 
-        let xkb_context = Context::from_x11_xkb(xconn.xcb_connection().get_raw_xcb_connection())
+        let xkb_context = xconn
+            .xcb_connection()
+            .with_xkb_connection(Context::from_x11_xkb)
             .map_err(|_| NotSupportedError::new("the X11 backend requires XKB 1.0 or newer"))?;
 
         let mut xmodmap = util::ModifierKeymap::new();
@@ -913,7 +915,7 @@ impl<'a> DeviceInfo<'a> {
     pub(crate) fn get(xconn: &'a XConnection, device: c_int) -> Option<Self> {
         unsafe {
             let mut count = 0;
-            let info = (xconn.xinput2.XIQueryDevice)(xconn.display, device, &mut count);
+            let info = (xconn.xinput2().XIQueryDevice)(xconn.display, device, &mut count);
             xconn.check_errors().ok()?;
 
             if info.is_null() || count == 0 {
@@ -928,7 +930,7 @@ impl<'a> DeviceInfo<'a> {
 impl Drop for DeviceInfo<'_> {
     fn drop(&mut self) {
         assert!(!self.info.is_null());
-        unsafe { (self.xconn.xinput2.XIFreeDeviceInfo)(self.info as *mut _) };
+        unsafe { (self.xconn.xinput2().XIFreeDeviceInfo)(self.info as *mut _) };
     }
 }
 
@@ -1174,15 +1176,18 @@ impl Device {
                 let ty = unsafe { (*class_ptr)._type };
                 if ty == ffi::XIScrollClass {
                     let info = unsafe { &*(class_ptr as *const ffi::XIScrollClassInfo) };
-                    scroll_axes.push((info.number, ScrollAxis {
-                        increment: info.increment,
-                        orientation: match info.scroll_type {
-                            ffi::XIScrollTypeHorizontal => ScrollOrientation::Horizontal,
-                            ffi::XIScrollTypeVertical => ScrollOrientation::Vertical,
-                            _ => unreachable!(),
+                    scroll_axes.push((
+                        info.number,
+                        ScrollAxis {
+                            increment: info.increment,
+                            orientation: match info.scroll_type {
+                                ffi::XIScrollTypeHorizontal => ScrollOrientation::Horizontal,
+                                ffi::XIScrollTypeVertical => ScrollOrientation::Vertical,
+                                _ => unreachable!(),
+                            },
+                            position: 0.0,
                         },
-                        position: 0.0,
-                    }));
+                    ));
                 } else if ty == ffi::XITouchClass {
                     r#type = Some(DeviceType::Touch);
                 } else if r#type.is_none() && ty == ffi::XIValuatorClass {

@@ -8,12 +8,12 @@ use super::{ImeEventSender, ffi};
 use crate::xdisplay::{XConnection, XError};
 
 pub(crate) unsafe fn close_im(xconn: &Arc<XConnection>, im: ffi::XIM) -> Result<(), XError> {
-    unsafe { (xconn.xlib.XCloseIM)(im) };
+    unsafe { (xconn.xlib().XCloseIM)(im) };
     xconn.check_errors()
 }
 
 pub(crate) unsafe fn destroy_ic(xconn: &Arc<XConnection>, ic: ffi::XIC) -> Result<(), XError> {
-    unsafe { (xconn.xlib.XDestroyIC)(ic) };
+    unsafe { (xconn.xlib().XDestroyIC)(ic) };
     xconn.check_errors()
 }
 

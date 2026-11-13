@@ -62,7 +62,7 @@ impl NativeEventQueue {
                     // releases the display lock while waiting. Unlike
                     // XIfEvent, it does not keep the predicate lock held.
                     let event = unsafe {
-                        (xconn.xlib.XPeekEvent)(xconn.display, event.as_mut_ptr());
+                        (xconn.xlib().XPeekEvent)(xconn.display, event.as_mut_ptr());
                         event.assume_init()
                     };
                     if event.get_type() == ffi::GenericEvent {
@@ -120,7 +120,7 @@ impl PendingEvents<'_> {
         // SAFETY: this guard pauses the reader, and XCheckIfEvent atomically
         // removes one event without blocking for further server input.
         let initialized = unsafe {
-            (xconn.xlib.XCheckIfEvent)(
+            (xconn.xlib().XCheckIfEvent)(
                 xconn.display,
                 event.as_mut_ptr(),
                 Some(any_event),

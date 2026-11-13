@@ -1,10 +1,9 @@
 # Neomacs integration fork
 
-`eval-exec/winit` uses `master` as its maintained Neomacs integration branch.
-Keep upstream history and the required platform fixes together here; Neomacs
-pins an exact commit from this branch. Topic branches are not separate release
-channels. The local `origin` remote is upstream `rust-windowing/winit`; `fork`
-is `eval-exec/winit`.
+`eval-exec/winit` uses `patch` as its maintained Neomacs integration branch;
+Neomacs pins an exact commit from it. Keep upstream history and the required
+platform fixes together here. Topic branches are not separate release channels. The Neomacs fork is `eval-exec/winit`; upstream is `rust-windowing/winit`.
+Check remote URLs rather than assuming a contributor's local remote names.
 
 ## Native input timestamps
 
@@ -108,3 +107,62 @@ Run the tests with an Android NDK toolchain and an ADB runner configured:
 cargo nextest run --target aarch64-linux-android -p winit-android \
   --features game-activity --lib -E 'test(/keycodes::tests/)' --test-threads 1
 ```
+
+## X11 established-connection loss
+
+Neomacs opts into one terminal-loss policy after normal graphical readiness.
+XCB send/reply/check/discard/event/flush operations and Xlib fatal I/O converge
+on that same connection generation before a local expect can turn transport
+loss into a Rust panic. Healthy protocol errors, parsing errors, resource
+failures and programmer invariants retain their existing policies. Request
+cookies remain bound to the guarded connection through reply/check/drop;
+transferring a cookie does not discard its request or leak received FDs.
+This backend handoff is separate from Neomacs's evaluator-owned shutdown and
+nonlocal Flow policy, and does not itself implement GNU's cleanup/exit result.
+
+The process-global native I/O gate is a deliberately narrow exception approved
+for this integration. Its entire payload is a fixed bounded set of atomic
+Display addresses, the exact prior global I/O-handler function pointer, and
+installation phase. It contains no Box, Arc, Rust/application owner, callback
+object, user_data pointer or native-to-owner lookup. Its matching-address
+branch merely returns to Xlib so Xlib can invoke that Display's own exit
+handler. Unknown/retired addresses chain to the exact saved prior handler.
+The short installer handshake performs no X I/O or application/display-lock
+lookup. It is not permission for a general process-global owner registry.
+
+The nonreturning Rust policy is owned ONLY through Xlib's per-Display exit
+handler user_data. Binding occurs immediately after successful XOpenDisplay,
+before requests/exposure to another thread; owner activation occurs later,
+after the application's readiness and urgent publication are established.
+The user_data allocation remains process-live for in-flight foreign callbacks;
+normal retirement removes its native address BEFORE XCloseDisplay, preventing
+address reuse from inheriting an old policy. Token retirement cannot cancel
+an epoch that already entered Lost. A future reconnecting backend must revisit
+this explicit lifetime model rather than accumulate retained owner allocations.
+Callbacks may retain native/caller locks: they neither unwind through C nor
+issue another X request, run Lisp/GUI cleanup or join a native reader. The
+application owner must prove its own completion dependencies independently.
+
+Xlib's default global I/O handler exits before a per-Display exit callback,
+so installing only the latter is insufficient. XSetIOErrorExitHandler is
+optional: resolve it from the SAME already-loaded Xlib mapping identified by
+XOpenDisplay (dladdr plus RTLD_NOLOAD/dlsym), without a link-time dependency,
+an alternate library or an RTLD_DEFAULT search. If unavailable, leave prior
+native policy intact and refuse ownership with LossNotOwned. Startup, no-hook
+and unknown auxiliary/driver-owned displays do not acquire an application
+owner implicitly. These rules follow the inspected libX11 1.8.13 release
+(XlibInt.c _XIOError; ErrHndlr.c XSetIOErrorHandler and
+XSetIOErrorExitHandler), including its fatal user-level display reservation.
+
+The gate saves its prior function once. Another library replacing the global
+I/O handler after preparation is conflicting native policy ownership and is
+unsupported; this fork does not repeatedly overwrite it or claim coexistence
+without a new reviewed protocol. Existing protocol-error hooks remain a
+different interface and preserve their behavior.
+
+Pure adapter/state/source checks run with cargo nextest on the fork. Real
+foreign reader/drain/BadWindow and paired GNU/Neomacs GUI-loss cases require
+owned authenticated Xvfb and finite process/memory scopes in Neomacs. A
+standalone callback-parking model proves only that model's mechanics; it is
+not evaluator liveness, pending-reply cancellation, nonlocal Flow, or GUI
+compatibility evidence. Quote only finished named test logs for validation.

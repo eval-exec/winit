@@ -17,11 +17,13 @@ macro_rules! os_error {
 
 mod activation;
 mod atoms;
+mod connection_loss;
 mod dnd;
 mod event_loop;
 mod event_processor;
 mod event_queue;
 pub mod ffi;
+mod guarded_connection;
 mod ime;
 mod monitor;
 mod util;
@@ -29,6 +31,10 @@ mod window;
 mod xdisplay;
 mod xsettings;
 
+pub use connection_loss::{
+    X11ConnectionId, X11ConnectionLoss, X11ConnectionLossHandler, X11ConnectionLossRegistration,
+    X11ConnectionLossRegistrationError, X11ConnectionLossSource,
+};
 pub use dnd::{Selection, SelectionReader, SelectionType, UriListParseError};
 
 /// X window type. Maps directly to
@@ -114,12 +120,44 @@ pub fn register_xlib_error_hook(hook: XlibErrorHook) {
 pub trait ActiveEventLoopExtX11 {
     /// True if the event loop uses X11.
     fn is_x11(&self) -> bool;
+
+    /// Identity of this event loop's established native X11 connection.
+    fn x11_connection_id(&self) -> Option<X11ConnectionId>;
+
+    /// Opt into terminal handoff after normal GUI readiness and after the
+    /// application's lock-free owner handoff is initialized for this identity.
+    ///
+    /// The callback can run before this method returns. Registration must not
+    /// hold an application or display lock. It is process-single-use; replacing
+    /// the global Xlib I/O handler later is conflicting ownership, not supported
+    /// callback replacement. Protocol X errors keep their existing hook policy.
+    fn register_connection_loss_handler(
+        &self,
+        handler: Box<dyn X11ConnectionLossHandler>,
+    ) -> Result<X11ConnectionLossRegistration, X11ConnectionLossRegistrationError>;
 }
 
 impl ActiveEventLoopExtX11 for dyn CoreActiveEventLoop + '_ {
     #[inline]
     fn is_x11(&self) -> bool {
         self.cast_ref::<ActiveEventLoop>().is_some()
+    }
+
+    fn x11_connection_id(&self) -> Option<X11ConnectionId> {
+        self.cast_ref::<ActiveEventLoop>()
+            .map(|event_loop| event_loop.xconn.connection_loss_state().id())
+    }
+
+    fn register_connection_loss_handler(
+        &self,
+        handler: Box<dyn X11ConnectionLossHandler>,
+    ) -> Result<X11ConnectionLossRegistration, X11ConnectionLossRegistrationError> {
+        let event_loop =
+            self.cast_ref::<ActiveEventLoop>().ok_or(X11ConnectionLossRegistrationError::NotX11)?;
+        if !event_loop.xconn.connection_loss_is_healthy() {
+            return Err(X11ConnectionLossRegistrationError::ConnectionUnavailable);
+        }
+        event_loop.xconn.connection_loss_state().register(handler)
     }
 }
 

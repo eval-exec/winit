@@ -20,10 +20,10 @@ impl XConnection {
         mask: xinput::XIEventMask,
     ) -> Result<VoidCookie<'_>, X11Error> {
         self.xcb_connection()
-            .xinput_xi_select_events(window, &[xinput::EventMask {
-                deviceid: device_id,
-                mask: vec![mask],
-            }])
+            .xinput_xi_select_events(
+                window,
+                &[xinput::EventMask { deviceid: device_id, mask: vec![mask] }],
+            )
             .map_err(Into::into)
     }
 
@@ -34,7 +34,7 @@ impl XConnection {
     ) -> Result<bool, X11Error> {
         let mask = u16::from(mask) as _;
         let status =
-            unsafe { (self.xlib.XkbSelectEvents)(self.display, device_id as _, mask, mask) };
+            unsafe { (self.xlib().XkbSelectEvents)(self.display, device_id as _, mask, mask) };
 
         if status == ffi::True {
             self.flush_requests()?;
@@ -66,7 +66,7 @@ impl XConnection {
         let mut keysym: ffi::KeySym = 0;
         let mut status: ffi::Status = 0;
         let count = unsafe {
-            (self.xlib.Xutf8LookupString)(
+            (self.xlib().Xutf8LookupString)(
                 ic,
                 key_event,
                 buffer as *mut c_char,
