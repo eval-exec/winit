@@ -147,7 +147,7 @@ impl EventProcessor {
     #[must_use]
     fn filter_event(&mut self, xev: &mut XEvent) -> bool {
         unsafe {
-            (self.target.xconn.xlib.XFilterEvent)(xev, {
+            (self.target.xconn.xlib().XFilterEvent)(xev, {
                 let xev: &XAnyEvent = xev.as_ref();
                 xev.window
             }) == xlib::True
@@ -436,10 +436,11 @@ impl EventProcessor {
                 dnd.init_state(version, source_window, window, types.into()).transfer_id
             };
 
-            app.window_event(&self.target, window_id, WindowEvent::DragEntered {
-                id: transfer_id,
-                position: None,
-            });
+            app.window_event(
+                &self.target,
+                window_id,
+                WindowEvent::DragEntered { id: transfer_id, position: None },
+            );
             return;
         }
 
@@ -499,16 +500,20 @@ impl EventProcessor {
                 state.transfer_id
             };
 
-            app.window_event(&self.target, window_id, WindowEvent::DragPosition {
-                id: transfer_id,
-                position: PhysicalPosition::new(coords.dst_x as f64, coords.dst_y as f64),
-                // `Copy` is the default. Other actions are possible in X11, but the specification
-                // does not properly explain how to implement them (only giving a vague description
-                // of `XdndMove`). For simplicity's sake, we simply do not implement non-copy drag
-                // on X11.
-                // See https://www.freedesktop.org/wiki/Specifications/XDND/
-                proposed_action: Some(DndAction::Copy),
-            });
+            app.window_event(
+                &self.target,
+                window_id,
+                WindowEvent::DragPosition {
+                    id: transfer_id,
+                    position: PhysicalPosition::new(coords.dst_x as f64, coords.dst_y as f64),
+                    // `Copy` is the default. Other actions are possible in X11, but the specification
+                    // does not properly explain how to implement them (only giving a vague description
+                    // of `XdndMove`). For simplicity's sake, we simply do not implement non-copy drag
+                    // on X11.
+                    // See https://www.freedesktop.org/wiki/Specifications/XDND/
+                    proposed_action: Some(DndAction::Copy),
+                },
+            );
 
             return;
         }
@@ -562,9 +567,11 @@ impl EventProcessor {
             let Some(state) = dnd.state() else {
                 return;
             };
-            app.window_event(&self.target, window_id, WindowEvent::DragLeft {
-                id: state.transfer_id,
-            });
+            app.window_event(
+                &self.target,
+                window_id,
+                WindowEvent::DragLeft { id: state.transfer_id },
+            );
         }
     }
 
@@ -640,11 +647,11 @@ impl EventProcessor {
 
         let window_id = mkwid(xwindow);
 
-        app.window_event(&self.target, window_id, WindowEvent::DataTransferReceived {
-            id: transfer_id,
-            serial,
-            value,
-        });
+        app.window_event(
+            &self.target,
+            window_id,
+            WindowEvent::DataTransferReceived { id: transfer_id, serial, value },
+        );
 
         let dnd = self.target.dnd.borrow();
 
@@ -781,10 +788,14 @@ impl EventProcessor {
                 drop(shared_state_lock);
 
                 let surface_size = Arc::new(Mutex::new(new_surface_size));
-                app.window_event(&self.target, window_id, WindowEvent::ScaleFactorChanged {
-                    scale_factor: new_scale_factor,
-                    surface_size_writer: SurfaceSizeWriter::new(Arc::downgrade(&surface_size)),
-                });
+                app.window_event(
+                    &self.target,
+                    window_id,
+                    WindowEvent::ScaleFactorChanged {
+                        scale_factor: new_scale_factor,
+                        surface_size_writer: SurfaceSizeWriter::new(Arc::downgrade(&surface_size)),
+                    },
+                );
 
                 let new_surface_size = *surface_size.lock().unwrap();
                 drop(surface_size);
@@ -1032,11 +1043,14 @@ impl EventProcessor {
             None => return,
         };
 
-        let xcb = self.target.xconn.xcb_connection().get_raw_xcb_connection();
-
         // Use synthetic state since we're replaying the modifier. The user modifier state
         // will be restored later.
-        let mut xkb_state = match XkbState::new_x11(xcb, keymap) {
+        let mut xkb_state = match self
+            .target
+            .xconn
+            .xcb_connection()
+            .with_xkb_connection(|xcb| XkbState::new_x11(xcb, keymap))
+        {
             Some(xkb_state) => xkb_state,
             None => return,
         };
@@ -1581,8 +1595,10 @@ impl EventProcessor {
                 if xev.device == self.xkb_context.core_keyboard_id
                     && (keycodes_changed || geometry_changed)
                 {
-                    let xcb = self.target.xconn.xcb_connection().get_raw_xcb_connection();
-                    self.xkb_context.set_keymap_from_x11(xcb);
+                    self.target
+                        .xconn
+                        .xcb_connection()
+                        .with_xkb_connection(|xcb| self.xkb_context.set_keymap_from_x11(xcb));
                     self.xmodmap.reload_from_x_connection(&self.target.xconn);
 
                     let window_id = match self.active_window.map(mkwid) {
@@ -1597,8 +1613,10 @@ impl EventProcessor {
                 }
             },
             xlib::XkbMapNotify => {
-                let xcb = self.target.xconn.xcb_connection().get_raw_xcb_connection();
-                self.xkb_context.set_keymap_from_x11(xcb);
+                self.target
+                    .xconn
+                    .xcb_connection()
+                    .with_xkb_connection(|xcb| self.xkb_context.set_keymap_from_x11(xcb));
                 self.xmodmap.reload_from_x_connection(&self.target.xconn);
                 let window_id = match self.active_window.map(mkwid) {
                     Some(window_id) => window_id,
@@ -1680,7 +1698,7 @@ impl EventProcessor {
 
         unsafe {
             let mut state: XkbStateRec = std::mem::zeroed();
-            if (self.target.xconn.xlib.XkbGetState)(
+            if (self.target.xconn.xlib().XkbGetState)(
                 self.target.xconn.display,
                 XkbId::USE_CORE_KBD.into(),
                 &mut state,
@@ -1801,15 +1819,17 @@ impl EventProcessor {
         app: &mut dyn ApplicationHandler,
     ) {
         // Update modifiers state and emit key events based on which keys are currently pressed.
-        let xcb = target.xconn.xcb_connection().get_raw_xcb_connection();
-
         let keymap = match xkb_context.keymap_mut() {
             Some(keymap) => keymap,
             None => return,
         };
 
         // Send the keys using the synthetic state to not alter the main state.
-        let mut xkb_state = match XkbState::new_x11(xcb, keymap) {
+        let mut xkb_state = match target
+            .xconn
+            .xcb_connection()
+            .with_xkb_connection(|xcb| XkbState::new_x11(xcb, keymap))
+        {
             Some(xkb_state) => xkb_state,
             None => return,
         };

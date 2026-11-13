@@ -30,7 +30,7 @@ impl ModifierKeymap {
 
     pub fn reload_from_x_connection(&mut self, xconn: &super::XConnection) {
         unsafe {
-            let keymap = (xconn.xlib.XGetModifierMapping)(xconn.display);
+            let keymap = (xconn.xlib().XGetModifierMapping)(xconn.display);
 
             if keymap.is_null() {
                 return;
@@ -38,7 +38,7 @@ impl ModifierKeymap {
 
             self.reset_from_x_keymap(&*keymap);
 
-            (xconn.xlib.XFreeModifiermap)(keymap);
+            (xconn.xlib().XFreeModifiermap)(keymap);
         }
     }
 

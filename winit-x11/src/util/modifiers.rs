@@ -49,7 +49,12 @@ impl ModifierKeymap {
 
     pub fn reset_from_x_connection(&mut self, xconn: &XConnection) {
         {
-            let keymap = xconn.xcb_connection().get_modifier_mapping().expect("get_modifier_mapping failed").reply().expect("get_modifier_mapping failed");
+            let keymap = xconn
+                .xcb_connection()
+                .get_modifier_mapping()
+                .expect("get_modifier_mapping failed")
+                .reply()
+                .expect("get_modifier_mapping failed");
 
             if keymap.is_null() {
                 panic!("failed to allocate XModifierKeymap");
@@ -57,7 +62,7 @@ impl ModifierKeymap {
 
             self.reset_from_x_keymap(&*keymap);
 
-            (xconn.xlib.XFreeModifiermap)(keymap);
+            (xconn.xlib().XFreeModifiermap)(keymap);
         }
     }
 

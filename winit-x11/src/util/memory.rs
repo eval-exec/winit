@@ -16,7 +16,7 @@ impl<'a, T> XSmartPointer<'a, T> {
 impl<T> Drop for XSmartPointer<'_, T> {
     fn drop(&mut self) {
         unsafe {
-            (self.xconn.xlib.XFree)(self.ptr as *mut _);
+            (self.xconn.xlib().XFree)(self.ptr as *mut _);
         }
     }
 }

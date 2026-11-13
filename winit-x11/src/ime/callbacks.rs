@@ -17,7 +17,7 @@ pub(crate) unsafe fn xim_set_callback(
 ) -> Result<(), XError> {
     // It's advisable to wrap variadic FFI functions in our own functions, as we want to minimize
     // access that isn't type-checked.
-    unsafe { (xconn.xlib.XSetIMValues)(xim, field, callback, ptr::null_mut::<()>()) };
+    unsafe { (xconn.xlib().XSetIMValues)(xim, field, callback, ptr::null_mut::<()>()) };
     xconn.check_errors()
 }
 
@@ -32,7 +32,7 @@ pub(crate) unsafe fn set_instantiate_callback(
     client_data: ffi::XPointer,
 ) -> Result<(), XError> {
     unsafe {
-        (xconn.xlib.XRegisterIMInstantiateCallback)(
+        (xconn.xlib().XRegisterIMInstantiateCallback)(
             xconn.display,
             ptr::null_mut(),
             ptr::null_mut(),
@@ -49,7 +49,7 @@ pub(crate) unsafe fn unset_instantiate_callback(
     client_data: ffi::XPointer,
 ) -> Result<(), XError> {
     unsafe {
-        (xconn.xlib.XUnregisterIMInstantiateCallback)(
+        (xconn.xlib().XUnregisterIMInstantiateCallback)(
             xconn.display,
             ptr::null_mut(),
             ptr::null_mut(),

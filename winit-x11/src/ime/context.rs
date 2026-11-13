@@ -263,7 +263,7 @@ impl ImeContext {
         window: ffi::Window,
     ) -> Option<ffi::XIC> {
         let ic = unsafe {
-            (xconn.xlib.XCreateIC)(
+            (xconn.xlib().XCreateIC)(
                 im,
                 ffi::XNInputStyle_0.as_ptr() as *const _,
                 style,
@@ -285,7 +285,7 @@ impl ImeContext {
     ) -> Option<ffi::XIC> {
         let preedit_callbacks = PreeditCallbacks::new(client_data);
         let preedit_attr = util::memory::XSmartPointer::new(xconn, unsafe {
-            (xconn.xlib.XVaCreateNestedList)(
+            (xconn.xlib().XVaCreateNestedList)(
                 0,
                 ffi::XNPreeditStartCallback_0.as_ptr() as *const _,
                 &(preedit_callbacks.start_callback) as *const _,
@@ -301,7 +301,7 @@ impl ImeContext {
         .expect("XVaCreateNestedList returned NULL");
 
         let ic = unsafe {
-            (xconn.xlib.XCreateIC)(
+            (xconn.xlib().XCreateIC)(
                 im,
                 ffi::XNInputStyle_0.as_ptr() as *const _,
                 style,
@@ -323,7 +323,7 @@ impl ImeContext {
         window: ffi::Window,
     ) -> Option<ffi::XIC> {
         let ic = unsafe {
-            (xconn.xlib.XCreateIC)(
+            (xconn.xlib().XCreateIC)(
                 im,
                 ffi::XNInputStyle_0.as_ptr() as *const _,
                 style,
@@ -338,14 +338,14 @@ impl ImeContext {
 
     pub(crate) fn focus(&self, xconn: &Arc<XConnection>) -> Result<(), XError> {
         unsafe {
-            (xconn.xlib.XSetICFocus)(self.ic);
+            (xconn.xlib().XSetICFocus)(self.ic);
         }
         xconn.check_errors()
     }
 
     pub(crate) fn unfocus(&self, xconn: &Arc<XConnection>) -> Result<(), XError> {
         unsafe {
-            (xconn.xlib.XUnsetICFocus)(self.ic);
+            (xconn.xlib().XUnsetICFocus)(self.ic);
         }
         xconn.check_errors()
     }
@@ -383,7 +383,7 @@ impl ImeContext {
         unsafe {
             let preedit_attr = util::memory::XSmartPointer::new(
                 xconn,
-                (xconn.xlib.XVaCreateNestedList)(
+                (xconn.xlib().XVaCreateNestedList)(
                     0,
                     ffi::XNSpotLocation_0.as_ptr(),
                     &ic_spot,
@@ -394,7 +394,7 @@ impl ImeContext {
             )
             .expect("XVaCreateNestedList returned NULL");
 
-            (xconn.xlib.XSetICValues)(
+            (xconn.xlib().XSetICValues)(
                 self.ic,
                 ffi::XNPreeditAttributes_0.as_ptr() as *const _,
                 preedit_attr.ptr,

@@ -17,7 +17,7 @@ impl GenericEventCookie {
     pub fn from_event(xconn: Arc<XConnection>, event: XEvent) -> Option<GenericEventCookie> {
         unsafe {
             let mut cookie: XGenericEventCookie = From::from(event);
-            if (xconn.xlib.XGetEventData)(xconn.display, &mut cookie) == xlib::True {
+            if (xconn.xlib().XGetEventData)(xconn.display, &mut cookie) == xlib::True {
                 Some(GenericEventCookie { cookie, xconn })
             } else {
                 None
@@ -49,7 +49,7 @@ impl GenericEventCookie {
 impl Drop for GenericEventCookie {
     fn drop(&mut self) {
         unsafe {
-            (self.xconn.xlib.XFreeEventData)(self.xconn.display, &mut self.cookie);
+            (self.xconn.xlib().XFreeEventData)(self.xconn.display, &mut self.cookie);
         }
     }
 }
