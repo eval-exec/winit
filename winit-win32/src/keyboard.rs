@@ -30,7 +30,9 @@ use winit_core::keyboard::{
 };
 
 use crate::event_loop::ProcResult;
-use crate::keyboard_layout::{LAYOUT_CACHE, Layout, LayoutCache, WindowsModifiers};
+use crate::keyboard_layout::{
+    LAYOUT_CACHE, Layout, LayoutCache, WindowsModifiers, key_value_modifiers,
+};
 use crate::util::{loword, primarylangid};
 
 pub type ExScancode = u16;
@@ -513,8 +515,8 @@ impl PartialKeyEventInfo {
 
         let kbd_state = get_kbd_state();
         let mods = WindowsModifiers::active_modifiers(&kbd_state);
-        let mods_without_ctrl = mods.remove_only_ctrl();
         let num_lock_on = kbd_state[VK_NUMLOCK as usize] & 1 != 0;
+        let key_value_mods = key_value_modifiers(mods, layout.is_altgr_chord());
 
         // On Windows Ctrl+NumLock = Pause (and apparently Ctrl+Pause -> NumLock). In these cases
         // the KeyCode still stores the real key, so in the name of consistency across platforms, we
@@ -533,7 +535,7 @@ impl PartialKeyEventInfo {
         };
 
         let preliminary_logical_key =
-            layout.get_key(mods_without_ctrl, num_lock_on, vkey, &physical_key);
+            layout.get_key(key_value_mods, num_lock_on, vkey, &physical_key);
         // FIXME(madsmtm): Is the `chars != " "` check desired here?
         let key_is_char = matches!(&preliminary_logical_key, Key::Character(chars) if chars != " ");
         let is_pressed = state == ElementState::Pressed;

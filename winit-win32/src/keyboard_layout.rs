@@ -103,6 +103,19 @@ bitflags::bitflags! {
     }
 }
 
+/// The layout modifier state that carries a key's value.
+///
+/// Ctrl+Alt is AltGr only when the layout has an AltGr level and the right Alt
+/// key is down; otherwise Ctrl and Alt are command modifiers, and the key's
+/// value is what the layout gives it with only Shift and CapsLock applied.
+pub(crate) fn key_value_modifiers(mods: WindowsModifiers, is_altgr: bool) -> WindowsModifiers {
+    if is_altgr {
+        mods.remove_only_ctrl()
+    } else {
+        mods & (WindowsModifiers::SHIFT | WindowsModifiers::CAPS_LOCK)
+    }
+}
+
 impl WindowsModifiers {
     pub fn active_modifiers(key_state: &[u8; 256]) -> WindowsModifiers {
         let shift = key_state[VK_SHIFT as usize] & 0x80 != 0;
@@ -207,6 +220,17 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
+    /// Whether the chord is an AltGr composition rather than Ctrl+Alt as two
+    /// command modifiers.
+    ///
+    /// Windows synthesizes a left Ctrl for AltGr, and the right Alt key is the
+    /// one that selects the layout's AltGr level.  A left-Alt chord is
+    /// therefore two command modifiers even on a layout that has an AltGr
+    /// level.
+    pub fn is_altgr_chord(&self) -> bool {
+        self.has_alt_graph && key_pressed(VK_LCONTROL) && key_pressed(VK_RMENU)
+    }
+
     pub fn get_key(
         &self,
         mods: WindowsModifiers,
@@ -244,6 +268,21 @@ impl Layout {
             if let Some(keys) = self.keys.get(&mods) {
                 if let Some(key) = keys.get(code) {
                     return key.clone();
+                }
+            }
+
+            // Ctrl and Alt are command modifiers on Windows, and `ToUnicode`
+            // (and thus this layout map) yields no character for a chord that
+            // has no AltGr composition.  The key still has a value: the one
+            // the layout gives it with only Shift and CapsLock applied.
+            // Falling back to that keeps the key named instead of reporting
+            // `Unidentified`, so a Ctrl+Alt chord remains bindable.
+            let key_value_mods = mods & (WindowsModifiers::SHIFT | WindowsModifiers::CAPS_LOCK);
+            if key_value_mods != mods {
+                if let Some(keys) = self.keys.get(&key_value_mods) {
+                    if let Some(key) = keys.get(code) {
+                        return key.clone();
+                    }
                 }
             }
         }
@@ -980,5 +1019,87 @@ fn vkey_to_non_char_key(
         VK_PA1 => Key::Unidentified(native_code),
         VK_OEM_CLEAR => Key::Named(NamedKey::Clear),
         _ => Key::Unidentified(native_code),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_3, VK_E, VK_N};
+
+    fn layout(keys: HashMap<WindowsModifiers, HashMap<KeyCode, Key>>) -> Layout {
+        Layout {
+            hkl: 0,
+            numlock_on_keys: HashMap::new(),
+            numlock_off_keys: HashMap::new(),
+            keys,
+            has_alt_graph: false,
+        }
+    }
+
+    /// A Ctrl+Alt chord has no layout entry on a layout without an AltGr
+    /// composition, but the key's value with the command modifiers removed is
+    /// still the value the key produces on its own.
+    #[test]
+    fn command_chord_falls_back_to_the_keys_base_value() {
+        let layout = layout(HashMap::from([
+            (
+                WindowsModifiers::empty(),
+                HashMap::from([(KeyCode::KeyN, Key::Character("n".into()))]),
+            ),
+            (
+                WindowsModifiers::SHIFT,
+                HashMap::from([(KeyCode::Digit3, Key::Character("#".into()))]),
+            ),
+            (
+                WindowsModifiers::CONTROL | WindowsModifiers::ALT,
+                HashMap::from([(KeyCode::KeyE, Key::Character("€".into()))]),
+            ),
+        ]));
+
+        assert_eq!(
+            layout.get_key(
+                WindowsModifiers::CONTROL | WindowsModifiers::ALT,
+                false,
+                VK_N,
+                &PhysicalKey::Code(KeyCode::KeyN),
+            ),
+            Key::Character("n".into())
+        );
+        assert_eq!(
+            layout.get_key(
+                WindowsModifiers::CONTROL | WindowsModifiers::ALT | WindowsModifiers::SHIFT,
+                false,
+                VK_3,
+                &PhysicalKey::Code(KeyCode::Digit3),
+            ),
+            Key::Character("#".into())
+        );
+
+        // An AltGr composition that the layout does have still wins.
+        assert_eq!(
+            layout.get_key(
+                WindowsModifiers::CONTROL | WindowsModifiers::ALT,
+                false,
+                VK_E,
+                &PhysicalKey::Code(KeyCode::KeyE),
+            ),
+            Key::Character("€".into())
+        );
+    }
+
+    #[test]
+    fn command_chords_use_the_key_value_without_ctrl_and_alt() {
+        let chord = WindowsModifiers::CONTROL | WindowsModifiers::ALT | WindowsModifiers::SHIFT;
+        assert_eq!(
+            key_value_modifiers(chord, false).bits(),
+            WindowsModifiers::SHIFT.bits(),
+            "a left-Alt chord is two command modifiers, not AltGr"
+        );
+        assert_eq!(
+            key_value_modifiers(chord, true).bits(),
+            (WindowsModifiers::CONTROL | WindowsModifiers::ALT | WindowsModifiers::SHIFT).bits(),
+            "an AltGr chord keeps the modifier state the layout composes from"
+        );
     }
 }
